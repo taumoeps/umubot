@@ -1,24 +1,25 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getProductDetail } from '@/lib/pricerCatalogView'
+import { getProductDetail } from '@/lib/productDetailView'
+import { supabase } from '@/lib/supabase'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
 
-// UmuBot -- mirrors Pricer's product detail page structure (image/tag
-// header, Today's prices + Price outlook two-column layout, Price
-// history chart). Keyed by the real observed item_name.
+// UmuBot -- product detail page: Today's prices + Price outlook,
+// Price history chart. Keyed by the real observed item_name.
 //
-// Real differences from Pricer, kept honest rather than hidden:
+// What's real vs honestly flagged:
 // - No product image -- nothing real to show one from, so a plain
 //   placeholder square, not a stock photo.
 // - "Today's prices" shows each chain's most recent REAL observation,
 //   which may be days old -- the real date is shown on each row rather
-//   than implying it's literally today's price.
+//   than implying it's literally today's price. Each row is tagged
+//   Live or Estimated (src/lib/confidence.ts) -- the real differentiator
+//   from Pricer, operator decision 2026-10-11: say which prices were
+//   actually seen vs estimated, which Pricer's UI never does.
 // - "Price outlook" reports a real lowest-ever price and the real date
 //   range behind it, not a fixed "30-day low" -- actual history here is
 //   often shorter than 30 days.
 
-// 5-minute cache -- same reasoning as the homepage (external review,
-// 2026-10-11): underlying data changes once daily, not per-request.
 export const revalidate = 300
 
 const CHAIN_LABELS: Record<string, string> = {
@@ -28,11 +29,25 @@ const CHAIN_LABELS: Record<string, string> = {
   freshchoice: 'FreshChoice',
 }
 
+function TierBadge({ tier }: { tier: 'live' | 'estimated' }) {
+  return tier === 'live' ? (
+    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Live</span>
+  ) : (
+    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">Estimated</span>
+  )
+}
+
 export default async function ProductDetailPage({ params }: { params: Promise<{ itemName: string }> }) {
   const { itemName: encoded } = await params
   const itemName = decodeURIComponent(encoded)
   const detail = await getProductDetail(itemName)
   if (!detail) notFound()
+
+  let foodDisplayName: string | null = null
+  if (detail.foodId) {
+    const { data: food } = await supabase.from('essential_foods').select('display_name').eq('id', detail.foodId).maybeSingle()
+    foodDisplayName = (food as { display_name: string } | null)?.display_name ?? null
+  }
 
   const atLowest = detail.todayByChain.some((t) => t.priceCents === detail.lowestEverCents)
   const sameDay = detail.historyStartDate === detail.historyEndDate
@@ -40,17 +55,11 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   return (
     <div>
       <p className="text-sm text-gray-500 mb-4">
-        <Link href="/" className="hover:text-green-600">Products</Link>
-        {detail.category && (
+        <Link href="/" className="hover:text-green-600">Essential Foods</Link>
+        {detail.foodId && foodDisplayName && (
           <>
             <span className="mx-2">›</span>
-            {detail.category}
-          </>
-        )}
-        {detail.subcategory && (
-          <>
-            <span className="mx-2">›</span>
-            {detail.subcategory}
+            <Link href={`/food/${encodeURIComponent(detail.foodId)}`} className="hover:text-green-600">{foodDisplayName}</Link>
           </>
         )}
       </p>
@@ -62,9 +71,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         <div>
           <div className="flex flex-wrap items-center gap-2 mb-1">
             {detail.brand && <span className="text-sm font-semibold text-green-700">{detail.brand}</span>}
-            {detail.subcategory && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">{detail.subcategory}</span>
-            )}
             {detail.packSize && (
               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">{detail.packSize}</span>
             )}
@@ -87,6 +93,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                     {t.isCheapest && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Cheapest</span>
                     )}
+                    <TierBadge tier={t.tier} />
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">
                     {t.storeName} · as of {new Date(t.observedAt).toLocaleDateString()}

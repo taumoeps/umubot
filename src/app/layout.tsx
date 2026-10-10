@@ -7,7 +7,7 @@ const geist = Geist({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'UmuBot',
-  description: 'Real New Zealand supermarket prices, tracked honestly',
+  description: 'Essential New Zealand food prices, tagged live or estimated — never shown without saying which',
 }
 
 // No auth gate -- this site is public, unlike mosaro's portal it was

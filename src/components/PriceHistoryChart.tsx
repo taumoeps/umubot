@@ -1,4 +1,4 @@
-import type { ChainHistory } from '@/lib/pricerCatalogView'
+import type { ChainHistory } from '@/lib/productDetailView'
 
 // UmuBot -- mirrors Pricer's price history line chart. Hand-rolled SVG,
 // not a charting library (none installed). Plots only real data points

@@ -2,15 +2,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-// Public nav -- no auth, no sign-out, no admin-portal links (Apps/Users/
-// Logs/Profile from mosaro's Sidebar.tsx don't belong here; this project
-// is exactly one thing, not a multi-section admin portal). Same visual
-// pattern as mosaro's Sidebar for continuity, pared down to what this
-// site actually has: Products, Brands, Price Index -- matching Pricer's
-// real left nav structure.
+// Public nav -- no auth, no sign-out. Rebuilt 2026-10-11 (operator
+// decision to differentiate from Pricer): dropped "Brands" (real brand
+// data barely exists and it was a direct Pricer-structure copy), and
+// "Products" became "Essential Foods" -- a narrow, honest list of real
+// foods, not a copy of Pricer's full catalogue.
 const links = [
-  { href: '/', label: 'Products', icon: '▣' },
-  { href: '/brands', label: 'Brands', icon: '◆' },
+  { href: '/', label: 'Essential Foods', icon: '▣' },
   { href: '/price-index', label: 'Price Index', icon: '◈' },
 ]
 
@@ -24,11 +22,10 @@ export default function Nav() {
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {links.map(({ href, label, icon }) => {
-          // '/' itself also owns /category/* and /product/* (Products
-          // browsing) -- /brands and /price-index are their own exact
-          // subtrees, checked on their own href.
+          // '/' itself also owns /food/* and /product/* (Essential Foods
+          // browsing) -- /price-index is its own exact subtree.
           const isActive = href === '/'
-            ? pathname === '/' || pathname.startsWith('/category/') || pathname.startsWith('/product/')
+            ? pathname === '/' || pathname.startsWith('/food/') || pathname.startsWith('/product/')
             : pathname === href || pathname.startsWith(`${href}/`)
           return (
             <Link

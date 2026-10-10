@@ -1,10 +1,17 @@
 # UmuBot
 
-Real New Zealand supermarket price tracking, structured like
-[pricer.nz](https://pricer.nz) — Products, Brands, and a Price Index.
-Public, no login, split out from the `mosaro` repo's internal admin
-portal on 2026-10-11 so this could be a real standalone product instead
-of living behind an operator login.
+Real New Zealand essential-food price tracking. Public, no login, split
+out from the `mosaro` repo's internal admin portal on 2026-10-11 so this
+could be a real standalone product instead of living behind an operator
+login.
+
+Deliberately different from [pricer.nz](https://pricer.nz), not a copy
+of it (operator decision, 2026-10-11): Pricer tracks ~60,000 products
+across every supermarket category. This tracks a narrow, honest set of
+real essential foods (~50), and every price is tagged **Live** (a real
+scanned price) or **Estimated** — a distinction Pricer's UI doesn't
+surface at all. "Essential Foods" is the whole homepage, not a sub-page
+of a general catalogue.
 
 ## Data
 
@@ -44,18 +51,17 @@ scaffolded in). To ship it:
 
 ## Structure
 
-- `/` — Products, the real Pricer category/subcategory taxonomy with
-  real counts
-- `/category/[category]/[subcategory]` — product table for one
-  subcategory
-- `/product/[itemName]` — product detail: today's prices, price
-  outlook, price history chart
-- `/brands`, `/brands/[brand]` — real brands from Baskt's own item data
+- `/` — Essential Foods, grouped by essential_foods' own 3 real
+  categories (Meat/Poultry/Fish, Dairy/Eggs/Staples, Fruit & Veg), real
+  tracked-item counts
+- `/food/[foodId]` — every real product matched to one essential food
+  (an essential food like "Milk" can have several real distinct
+  branded products), each tagged Live/Estimated
+- `/product/[itemName]` — one specific product: today's prices, price
+  outlook, price history chart, also tagged Live/Estimated
+- `/price-index` — the real chained Essential Food Price Index
 
-`src/lib/pricerCatalogTaxonomy.ts` and `src/lib/basktTaxonomyMapping.ts`
-are kept in sync with the same two files in `mosaro` — `mosaro`'s copies
-are canonical since that's where new real Baskt category/subcategory
-pairs get discovered first (its sync jobs write `baskt_category`). If a
-category looks wrong or empty that shouldn't be, check whether
-`mosaro`'s `basktTaxonomyMapping.ts` has a newer pair this copy is
-missing.
+No Brands page, no Pricer-style category/subcategory taxonomy --
+removed 2026-10-11. `price_observations.food_id` is a direct foreign
+key to `essential_foods`, so browsing doesn't need a category-name-
+guessing table the way the earlier Pricer-structured version did.
