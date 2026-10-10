@@ -21,6 +21,13 @@ export interface CoverageAndFreshness {
   coveragePct: number | null
   publicationStatus: 'published' | 'suppressed' | 'chain_restarted' | 'no_value_yet'
   seriesFreshness: SeriesFreshness[]
+  /** True when any of the three underlying queries genuinely failed (not
+   *  just returned no row) -- real bug, found via external review
+   *  2026-10-11: errors on all three were silently discarded (only
+   *  .data was read, .error never checked), so a real backend/RLS
+   *  failure would render identically to honest "nothing computed yet"
+   *  emptiness. The caller/UI can use this to tell the two apart. */
+  queryFailed: boolean
 }
 
 /** `category` here is essential_foods' own internal 3-value category
@@ -48,6 +55,11 @@ export async function getCoverageAndFreshness(countryCode: string, chain: string
       .maybeSingle(),
     supabase.from('essential_foods').select('id').eq('category', category),
   ])
+
+  let queryFailed = false
+  if (linkResult.error) { console.error('[umubot] getCoverageAndFreshness link query error:', linkResult.error.message); queryFailed = true }
+  if (valueResult.error) { console.error('[umubot] getCoverageAndFreshness value query error:', valueResult.error.message); queryFailed = true }
+  if (foodsResult.error) { console.error('[umubot] getCoverageAndFreshness foods query error:', foodsResult.error.message); queryFailed = true }
 
   const foodIds = (foodsResult.data ?? []).map((f) => f.id as string)
   let seriesFreshness: SeriesFreshness[] = []
@@ -91,5 +103,6 @@ export async function getCoverageAndFreshness(countryCode: string, chain: string
     coveragePct: value?.coverage_pct ?? null,
     publicationStatus: (value?.publication_status as CoverageAndFreshness['publicationStatus'] | undefined) ?? 'no_value_yet',
     seriesFreshness,
+    queryFailed,
   }
 }

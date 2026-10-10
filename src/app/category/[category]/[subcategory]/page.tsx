@@ -6,7 +6,9 @@ import { getProductsForSubcategory } from '@/lib/pricerCatalogView'
 // UmuBot -- mirrors Pricer's /categories/[id] product table (Name,
 // Brand, Size, Lowest Price, Available At).
 
-export const revalidate = 0
+// 5-minute cache -- same reasoning as the homepage (external review,
+// 2026-10-11): underlying data changes once daily, not per-request.
+export const revalidate = 300
 
 export default async function SubcategoryPage({
   params,
@@ -55,7 +57,9 @@ export default async function SubcategoryPage({
                   </td>
                   <td className="px-5 py-3 text-gray-600">{p.brand ?? '—'}</td>
                   <td className="px-5 py-3 text-gray-600">{p.packSize ?? '—'}</td>
-                  <td className="px-5 py-3 text-right font-medium text-gray-800">${(p.lowestPriceCents / 100).toFixed(2)}</td>
+                  <td className="px-5 py-3 text-right font-medium text-gray-800" title={`As of ${new Date(p.lowestPriceAsOf).toLocaleDateString()}`}>
+                    ${(p.lowestPriceCents / 100).toFixed(2)}
+                  </td>
                   <td className="px-5 py-3 text-gray-600">{p.chains.join(', ') || '—'}</td>
                 </tr>
               ))

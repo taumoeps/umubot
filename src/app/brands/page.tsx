@@ -4,7 +4,9 @@ import { getBrandList } from '@/lib/pricerCatalogView'
 // UmuBot -- mirrors Pricer's /brands table (Name, Stockists, Products).
 // Real data only: price_observations.brand.
 
-export const revalidate = 0
+// 5-minute cache -- same reasoning as the homepage (external review,
+// 2026-10-11): underlying data changes once daily, not per-request.
+export const revalidate = 300
 
 export default async function BrandsPage() {
   const brands = await getBrandList()

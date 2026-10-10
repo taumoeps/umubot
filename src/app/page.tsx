@@ -9,7 +9,13 @@ import { getSubcategoryProductCounts, subcategoryCountKey } from '@/lib/pricerCa
 // numbers. Most will honestly read 0 -- the real catalog today is a
 // 48-food essential basket, not a full supermarket catalog.
 
-export const revalidate = 0
+// 5-minute cache, not 0 -- found via external review 2026-10-11: this
+// page runs getSubcategoryProductCounts(), which pages through the
+// entire price_observations table (up to 50,000 rows). The underlying
+// data only changes via the daily sync cron, so a 5-minute staleness
+// window is invisible in practice while cutting a full-table scan down
+// to once per 5 minutes instead of once per request.
+export const revalidate = 300
 
 export default async function ProductsPage() {
   const counts = await getSubcategoryProductCounts()

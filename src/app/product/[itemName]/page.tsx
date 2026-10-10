@@ -17,7 +17,9 @@ import PriceHistoryChart from '@/components/PriceHistoryChart'
 //   range behind it, not a fixed "30-day low" -- actual history here is
 //   often shorter than 30 days.
 
-export const revalidate = 0
+// 5-minute cache -- same reasoning as the homepage (external review,
+// 2026-10-11): underlying data changes once daily, not per-request.
+export const revalidate = 300
 
 const CHAIN_LABELS: Record<string, string> = {
   paknsave: "PAK'nSAVE",

@@ -9,7 +9,9 @@ import { getCoverageAndFreshness } from '@/lib/priceIndexCoverageView'
 // getCoverageAndFreshness functions, which means every tab honestly
 // shows "not enough data yet" instead of a fabricated number.
 
-export const revalidate = 0
+// 5-minute cache -- same reasoning as the homepage (external review,
+// 2026-10-11): underlying data changes once daily/monthly, not per-request.
+export const revalidate = 300
 
 const CHAINS = ['new-world', 'paknsave']
 const CATEGORIES = ['fruit_veg', 'meat_poultry_fish', 'dairy_eggs_staples']
@@ -70,6 +72,22 @@ async function OverviewTab() {
             {overview.publicationStatus} · coverage {overview.coveragePct?.toFixed(0)}% · base period {overview.basePeriod}
           </p>
         </>
+      ) : overview.queryFailed ? (
+        <>
+          <p className="text-2xl font-semibold text-red-500 mt-1">Couldn&apos;t load the index right now</p>
+          <p className="text-sm text-gray-500 mt-2 max-w-md">
+            A real query failed — this is a genuine error, not an honestly empty index. Try again shortly.
+          </p>
+        </>
+      ) : overview.suppressed ? (
+        <>
+          <p className="text-2xl font-semibold text-gray-400 mt-1">Index computed, not published</p>
+          <p className="text-sm text-gray-500 mt-2 max-w-md">
+            A real number was computed for {overview.period}, but coverage was too thin to publish it as a
+            trustworthy headline (coverage {overview.coveragePct?.toFixed(0)}%). Shown as unavailable rather
+            than displayed with false confidence.
+          </p>
+        </>
       ) : (
         <>
           <p className="text-2xl font-semibold text-gray-400 mt-1">No index value yet</p>
@@ -104,7 +122,17 @@ async function SupermarketsTab() {
           {rows.map(({ chain, overview }) => (
             <tr key={chain} className="border-b border-gray-100 last:border-0">
               <td className="px-5 py-3 font-medium text-gray-800">{CHAIN_LABELS[chain]}</td>
-              <td className="px-5 py-3 text-right text-gray-700">{overview.hasValue ? overview.indexValue?.toFixed(2) : <span className="text-gray-400 text-xs">no data yet</span>}</td>
+              <td className="px-5 py-3 text-right text-gray-700">
+                {overview.hasValue ? (
+                  overview.indexValue?.toFixed(2)
+                ) : overview.queryFailed ? (
+                  <span className="text-red-500 text-xs">query failed</span>
+                ) : overview.suppressed ? (
+                  <span className="text-gray-400 text-xs" title={`Coverage ${overview.coveragePct?.toFixed(0)}% -- too thin to publish`}>not published</span>
+                ) : (
+                  <span className="text-gray-400 text-xs">no data yet</span>
+                )}
+              </td>
               <td className="px-5 py-3 text-right text-gray-500">{overview.hasValue && overview.pctChangeMom !== null ? `${overview.pctChangeMom >= 0 ? '+' : ''}${overview.pctChangeMom.toFixed(2)}%` : '—'}</td>
             </tr>
           ))}
@@ -141,14 +169,20 @@ async function CategoriesTab() {
               <td className="px-5 py-3 font-medium text-gray-800">{CATEGORY_LABELS[category]}</td>
               {byChain.map(({ chain, coverage }) => (
                 <td key={chain} className="px-5 py-3 text-right">
-                  <span className="text-gray-700">{coverage.matchedCount ?? 0}/{coverage.eligibleCount}</span>
-                  <span
-                    className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${
-                      coverage.linkStatus === 'computed' ? 'bg-green-100 text-green-700' : coverage.linkStatus === 'uncomputable' ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 text-gray-400'
-                    }`}
-                  >
-                    {coverage.linkStatus === 'no_attempt_yet' ? 'not run' : coverage.linkStatus}
-                  </span>
+                  {coverage.queryFailed ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-600">query failed</span>
+                  ) : (
+                    <>
+                      <span className="text-gray-700">{coverage.matchedCount ?? 0}/{coverage.eligibleCount}</span>
+                      <span
+                        className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${
+                          coverage.linkStatus === 'computed' ? 'bg-green-100 text-green-700' : coverage.linkStatus === 'uncomputable' ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 text-gray-400'
+                        }`}
+                      >
+                        {coverage.linkStatus === 'no_attempt_yet' ? 'not run' : coverage.linkStatus}
+                      </span>
+                    </>
+                  )}
                 </td>
               ))}
             </tr>

@@ -82,7 +82,17 @@ export interface CatalogProduct {
   itemName: string
   brand: string | null
   packSize: string | null
+  /** The lowest price among each chain's MOST RECENT real observation --
+   *  not an all-time historical low. Real bug, found via external review
+   *  2026-10-11: the previous version took Math.min() over every row
+   *  ever returned for an item with no date awareness at all (the query
+   *  didn't even select observed_at), so a months-old price could
+   *  outrank today's real price and display as "the" lowest price --
+   *  e.g. milk at $3.50 last month, $4.80 today, catalogue shows $3.50.
+   *  Fixed by reducing to the latest row per (item, chain) first, then
+   *  taking the min across THOSE. */
   lowestPriceCents: number
+  lowestPriceAsOf: string
   chains: string[]
 }
 
@@ -92,13 +102,25 @@ interface ProductGroupRow {
   pack_size: string | null
   price_cents: number
   chain: string | null
+  observed_at: string
   baskt_category: string | null
   baskt_subcategory: string | null
 }
 
 function groupIntoProducts(rows: ProductGroupRow[]): CatalogProduct[] {
-  const byItem = new Map<string, CatalogProduct>()
+  // Reduce to the latest real observation per (item, chain) FIRST -- the
+  // only rows "lowest price" is allowed to be computed from. A stale
+  // price from a chain that hasn't been re-observed recently never beats
+  // a chain's own current price.
+  const latestByItemChain = new Map<string, ProductGroupRow>()
   for (const row of rows) {
+    const key = `${row.item_name}::${row.chain ?? ''}`
+    const existing = latestByItemChain.get(key)
+    if (!existing || row.observed_at > existing.observed_at) latestByItemChain.set(key, row)
+  }
+
+  const byItem = new Map<string, CatalogProduct>()
+  for (const row of latestByItemChain.values()) {
     const existing = byItem.get(row.item_name)
     if (!existing) {
       byItem.set(row.item_name, {
@@ -106,10 +128,14 @@ function groupIntoProducts(rows: ProductGroupRow[]): CatalogProduct[] {
         brand: row.brand,
         packSize: row.pack_size,
         lowestPriceCents: row.price_cents,
+        lowestPriceAsOf: row.observed_at,
         chains: row.chain ? [row.chain] : [],
       })
     } else {
-      existing.lowestPriceCents = Math.min(existing.lowestPriceCents, row.price_cents)
+      if (row.price_cents < existing.lowestPriceCents) {
+        existing.lowestPriceCents = row.price_cents
+        existing.lowestPriceAsOf = row.observed_at
+      }
       if (row.chain && !existing.chains.includes(row.chain)) existing.chains.push(row.chain)
       if (!existing.brand && row.brand) existing.brand = row.brand
       if (!existing.packSize && row.pack_size) existing.packSize = row.pack_size
@@ -126,7 +152,7 @@ export async function getProductsForSubcategory(categorySlug: string, subcategor
   const rows = await fetchAllRows<ProductGroupRow>((from, to) =>
     supabase
       .from('price_observations')
-      .select('item_name, brand, pack_size, price_cents, chain, baskt_category, baskt_subcategory')
+      .select('item_name, brand, pack_size, price_cents, chain, observed_at, baskt_category, baskt_subcategory')
       .not('baskt_category', 'is', null)
       .not('baskt_subcategory', 'is', null)
       .range(from, to) as unknown as Promise<{ data: ProductGroupRow[] | null; error: { message: string } | null }>
@@ -176,7 +202,7 @@ export async function getProductsForBrand(brand: string): Promise<CatalogProduct
   const rows = await fetchAllRows<ProductGroupRow>((from, to) =>
     supabase
       .from('price_observations')
-      .select('item_name, brand, pack_size, price_cents, chain')
+      .select('item_name, brand, pack_size, price_cents, chain, observed_at')
       .eq('brand', brand)
       .range(from, to) as unknown as Promise<{ data: ProductGroupRow[] | null; error: { message: string } | null }>
   )
