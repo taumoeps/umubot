@@ -3,12 +3,15 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 // Public nav -- no auth, no sign-out. Rebuilt 2026-10-11 (operator
-// decision to differentiate from Pricer): dropped "Brands" (real brand
-// data barely exists and it was a direct Pricer-structure copy), and
-// "Products" became "Essential Foods" -- a narrow, honest list of real
-// foods, not a copy of Pricer's full catalogue.
+// decision to differentiate from Pricer): "Essential Foods" (a narrow,
+// honest list of real foods) is the primary identity now, not a copy
+// of Pricer's full catalogue. "Products" -- the fuller Pricer-
+// structured catalogue, including Brands -- is kept as a real, working
+// secondary section for future growth rather than deleted (operator
+// decision: keep it to introduce later, don't throw the code away).
 const links = [
   { href: '/', label: 'Essential Foods', icon: '▣' },
+  { href: '/products', label: 'Products', icon: '▦' },
   { href: '/price-index', label: 'Price Index', icon: '◈' },
 ]
 
@@ -22,10 +25,12 @@ export default function Nav() {
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {links.map(({ href, label, icon }) => {
-          // '/' itself also owns /food/* and /product/* (Essential Foods
-          // browsing) -- /price-index is its own exact subtree.
+          // '/' owns /food/* (Essential Foods browsing); '/products' owns
+          // its own /products/* subtree (category/brand browsing).
+          // '/product/[itemName]' is reachable from both and doesn't
+          // highlight either -- it's genuinely shared, not owned by one.
           const isActive = href === '/'
-            ? pathname === '/' || pathname.startsWith('/food/') || pathname.startsWith('/product/')
+            ? pathname === '/' || pathname.startsWith('/food/')
             : pathname === href || pathname.startsWith(`${href}/`)
           return (
             <Link
