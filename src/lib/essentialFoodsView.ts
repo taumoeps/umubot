@@ -96,9 +96,16 @@ export async function getEssentialFoodsByCategory(): Promise<{ category: string;
     })
   }
 
-  return ((categories ?? []) as CategoryRow[])
-    .filter((c) => byCategory.has(c.id))
-    .map((c) => ({ category: c.id, label: c.label, foods: byCategory.get(c.id)! }))
+  // Every real category shows, even with zero foods -- a category the
+  // operator just added (before adding any foods to it yet) should be
+  // visible as real-but-empty, not silently disappear. Found live,
+  // 2026-10-11: a newly-added "Pantry Staples" category had no foods
+  // yet and the old .filter(c => byCategory.has(c.id)) hid it entirely.
+  return ((categories ?? []) as CategoryRow[]).map((c) => ({
+    category: c.id,
+    label: c.label,
+    foods: byCategory.get(c.id) ?? [],
+  }))
 }
 
 export async function getCategoryLabel(categoryId: string): Promise<string> {

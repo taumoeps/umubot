@@ -36,25 +36,31 @@ export default async function HomePage() {
               <h3 className="text-xl font-bold text-gray-800">{group.label}</h3>
               <span className="text-sm text-gray-400">{group.foods.length} foods</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {group.foods.map((food) => (
-                <Link
-                  key={food.id}
-                  href={`/food/${encodeURIComponent(food.id)}`}
-                  className="flex items-center justify-between bg-white rounded-xl border border-gray-200 px-4 py-3 hover:border-green-400 transition-colors"
-                >
-                  <div>
-                    <p className="font-medium text-gray-800">{food.displayName}</p>
-                    <p className={`text-xs mt-0.5 ${food.trackedItemCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                      {food.trackedItemCount > 0
-                        ? `${food.trackedItemCount} real product${food.trackedItemCount === 1 ? '' : 's'} tracked`
-                        : 'No real data yet'}
-                    </p>
-                  </div>
-                  <span className="text-gray-300">›</span>
-                </Link>
-              ))}
-            </div>
+            {group.foods.length === 0 ? (
+              <p className="text-sm text-gray-400 bg-white rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center">
+                No foods added to this category yet.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {group.foods.map((food) => (
+                  <Link
+                    key={food.id}
+                    href={`/food/${encodeURIComponent(food.id)}`}
+                    className="flex items-center justify-between bg-white rounded-xl border border-gray-200 px-4 py-3 hover:border-green-400 transition-colors"
+                  >
+                    <div>
+                      <p className="font-medium text-gray-800">{food.displayName}</p>
+                      <p className={`text-xs mt-0.5 ${food.trackedItemCount > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                        {food.trackedItemCount > 0
+                          ? `${food.trackedItemCount} real product${food.trackedItemCount === 1 ? '' : 's'} tracked`
+                          : 'No real data yet'}
+                      </p>
+                    </div>
+                    <span className="text-gray-300">›</span>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
