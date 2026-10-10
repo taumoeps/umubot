@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { getIndexOverview } from '@/lib/priceIndexOverviewView'
 import { getCoverageAndFreshness } from '@/lib/priceIndexCoverageView'
+import { supabase } from '@/lib/supabase'
 
 // UmuBot -- mirrors Pricer's /price-index (Overview / Supermarkets /
 // Categories tabs). The real, honest difference from Pricer's version:
@@ -14,13 +15,14 @@ import { getCoverageAndFreshness } from '@/lib/priceIndexCoverageView'
 export const revalidate = 300
 
 const CHAINS = ['new-world', 'paknsave']
-const CATEGORIES = ['fruit_veg', 'meat_poultry_fish', 'dairy_eggs_staples']
-const CATEGORY_LABELS: Record<string, string> = {
-  meat_poultry_fish: 'Meat, Poultry & Fish',
-  dairy_eggs_staples: 'Dairy, Eggs & Staples',
-  fruit_veg: 'Fruit & Vegetables',
-}
 const CHAIN_LABELS: Record<string, string> = { 'new-world': 'New World', paknsave: "PAK'nSAVE" }
+
+// Categories are DB-driven (essential_food_categories, 2026-10-11), not
+// hardcoded -- a newly-added category shows up here with no redeploy.
+async function getCategories(): Promise<{ id: string; label: string }[]> {
+  const { data } = await supabase.from('essential_food_categories').select('id, label').order('sort_order', { ascending: true })
+  return (data ?? []) as { id: string; label: string }[]
+}
 
 type Tab = 'overview' | 'supermarkets' | 'categories'
 
@@ -143,9 +145,11 @@ async function SupermarketsTab() {
 }
 
 async function CategoriesTab() {
+  const categories = await getCategories()
   const rows = await Promise.all(
-    CATEGORIES.map(async (category) => ({
+    categories.map(async ({ id: category, label }) => ({
       category,
+      label,
       byChain: await Promise.all(CHAINS.map(async (chain) => ({ chain, coverage: await getCoverageAndFreshness('NZ', chain, category) }))),
     }))
   )
@@ -164,9 +168,9 @@ async function CategoriesTab() {
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ category, byChain }) => (
+          {rows.map(({ category, label, byChain }) => (
             <tr key={category} className="border-b border-gray-100 last:border-0">
-              <td className="px-5 py-3 font-medium text-gray-800">{CATEGORY_LABELS[category]}</td>
+              <td className="px-5 py-3 font-medium text-gray-800">{label}</td>
               {byChain.map(({ chain, coverage }) => (
                 <td key={chain} className="px-5 py-3 text-right">
                   {coverage.queryFailed ? (

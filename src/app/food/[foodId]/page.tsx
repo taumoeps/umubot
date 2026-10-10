@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getFoodDetail, CATEGORY_LABELS } from '@/lib/essentialFoodsView'
+import { getFoodDetail, getCategoryLabel } from '@/lib/essentialFoodsView'
 
 // UmuBot -- shows every real product matched to one essential food
 // (e.g. "Milk" might have several real distinct products: different
@@ -21,13 +21,14 @@ export default async function FoodDetailPage({ params }: { params: Promise<{ foo
   const foodId = decodeURIComponent(encoded)
   const detail = await getFoodDetail(foodId)
   if (!detail) notFound()
+  const categoryLabel = await getCategoryLabel(detail.category)
 
   return (
     <div>
       <p className="text-sm text-gray-500 mb-1">
         <Link href="/" className="hover:text-green-600">Essential Foods</Link>
         <span className="mx-2">›</span>
-        {CATEGORY_LABELS[detail.category] ?? detail.category}
+        {categoryLabel}
       </p>
       <h2 className="text-2xl font-bold text-gray-800 mb-6">{detail.displayName}</h2>
 

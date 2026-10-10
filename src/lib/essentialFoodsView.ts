@@ -33,12 +33,11 @@ async function fetchAllRows<T>(
   return all
 }
 
-export const CATEGORY_LABELS: Record<string, string> = {
-  meat_poultry_fish: 'Meat, Poultry & Fish',
-  dairy_eggs_staples: 'Dairy, Eggs & Staples',
-  fruit_veg: 'Fruit & Vegetables',
-}
-export const CATEGORY_ORDER = ['meat_poultry_fish', 'dairy_eggs_staples', 'fruit_veg']
+// Category labels/order are DB-driven (essential_food_categories,
+// 2026-10-11), not hardcoded here -- the operator wants to grow the
+// essential-foods basket into new categories over time purely via SQL,
+// no app redeploy. getCategoryLabel below is the single-category
+// lookup used by the food detail page's breadcrumb.
 
 export interface FoodSummary {
   id: string
@@ -53,7 +52,18 @@ interface EssentialFoodRow {
   category: string
 }
 
+interface CategoryRow {
+  id: string
+  label: string
+}
+
 export async function getEssentialFoodsByCategory(): Promise<{ category: string; label: string; foods: FoodSummary[] }[]> {
+  const { data: categories, error: catError } = await supabase
+    .from('essential_food_categories')
+    .select('id, label')
+    .order('sort_order', { ascending: true })
+  if (catError) throw new Error(catError.message)
+
   const { data: foods, error: foodsError } = await supabase
     .from('essential_foods')
     .select('id, display_name, category')
@@ -86,11 +96,14 @@ export async function getEssentialFoodsByCategory(): Promise<{ category: string;
     })
   }
 
-  return CATEGORY_ORDER.filter((c) => byCategory.has(c)).map((category) => ({
-    category,
-    label: CATEGORY_LABELS[category] ?? category,
-    foods: byCategory.get(category)!,
-  }))
+  return ((categories ?? []) as CategoryRow[])
+    .filter((c) => byCategory.has(c.id))
+    .map((c) => ({ category: c.id, label: c.label, foods: byCategory.get(c.id)! }))
+}
+
+export async function getCategoryLabel(categoryId: string): Promise<string> {
+  const { data } = await supabase.from('essential_food_categories').select('label').eq('id', categoryId).maybeSingle()
+  return (data as { label: string } | null)?.label ?? categoryId
 }
 
 export interface FoodProduct {
