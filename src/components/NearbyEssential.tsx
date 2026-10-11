@@ -17,6 +17,7 @@ interface FlatProduct {
   itemName: string
   brand: string | null
   lowestPriceCents: number
+  tier: 'live' | 'estimated'
 }
 interface FlatGroup {
   category: string
@@ -174,7 +175,10 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
                   >
                     <div className="min-w-0">
                       <p className="font-medium text-gray-800 truncate">{p.itemName}</p>
-                      <p className="text-xs text-gray-400 truncate">{p.brand ?? 'No brand recorded'}</p>
+                      <p className="text-xs text-gray-400 truncate">
+                        {p.brand ?? 'No brand recorded'}
+                        {p.tier === 'estimated' && <span className="ml-1.5 text-amber-600 font-medium">Estimated</span>}
+                      </p>
                     </div>
                     <p className="text-sm font-bold text-gray-800 shrink-0 ml-3">${(p.lowestPriceCents / 100).toFixed(2)}</p>
                   </Link>
