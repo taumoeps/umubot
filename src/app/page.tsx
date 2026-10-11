@@ -1,12 +1,16 @@
-import Link from 'next/link'
 import { getEssentialProductsByCategory } from '@/lib/essentialFoodsView'
+import NearbyEssential from '@/components/NearbyEssential'
 
-// UmuBot -- homepage. Rebuilt 2026-10-11 (operator decision): Essential
-// now shows ONLY real products individually flagged essential
-// (essential_products), not every product that happened to match an
-// essential_foods search-term concept. A category with nothing flagged
-// in it simply doesn't show -- that clutter was the whole complaint
-// that led to this rebuild.
+// UmuBot -- homepage. Essential shows ONLY real products individually
+// flagged essential (essential_products), not every product that
+// happened to match an essential_foods search-term concept. Location-
+// aware nearest-store matching (NearbyEssential.tsx), ported from the
+// RecipeBot iOS app's Today view at the operator's explicit request,
+// 2026-10-11 -- an explicit "Use my location" action finds the real
+// nearest store's price for each of the real 22 essential foods,
+// substituting a real fallback food when the primary has none nearby.
+// Declining or not using it just shows all real variants (the default
+// below), same as before.
 
 export const revalidate = 300
 
@@ -27,37 +31,7 @@ export default async function HomePage() {
         without saying which.
       </p>
 
-      {groups.length === 0 ? (
-        <p className="text-sm text-gray-400 bg-white rounded-xl border border-dashed border-gray-200 px-4 py-10 text-center">
-          No products flagged essential yet.
-        </p>
-      ) : (
-        <div className="space-y-8">
-          {groups.map((group) => (
-            <div key={group.category}>
-              <div className="flex items-baseline gap-2 mb-3">
-                <h3 className="text-xl font-bold text-gray-800">{group.label}</h3>
-                <span className="text-sm text-gray-400">{group.products.length} product{group.products.length === 1 ? '' : 's'}</span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {group.products.map((p) => (
-                  <Link
-                    key={p.itemName}
-                    href={`/product/${encodeURIComponent(p.itemName)}`}
-                    className="flex items-center justify-between bg-white rounded-xl border border-gray-200 px-4 py-3 hover:border-green-400 transition-colors"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-medium text-gray-800 truncate">{p.itemName}</p>
-                      <p className="text-xs text-gray-400 truncate">{p.brand ?? 'No brand recorded'}</p>
-                    </div>
-                    <p className="text-sm font-bold text-gray-800 shrink-0 ml-3">${(p.lowestPriceCents / 100).toFixed(2)}</p>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <NearbyEssential flatGroups={groups} />
     </div>
   )
 }
