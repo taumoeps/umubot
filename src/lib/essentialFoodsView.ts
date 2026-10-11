@@ -1,9 +1,10 @@
 import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { confidenceTierForSource, type ConfidenceTier } from './confidence'
+import { runPaginated } from './paginatedQuery'
 
-// UmuBot -- Essential is driven by essential_products (real,
-// individually-flagged products), not essential_foods concepts
+// UmuBot -- Essential is driven by essential_products
+// (real, individually-flagged products), not essential_foods concepts
 // directly (operator decision, 2026-10-11: Essential should show ONLY
 // what's actually been flagged essential, not every product that
 // happened to match an essential_foods search-term concept).
@@ -53,42 +54,15 @@ import { confidenceTierForSource, type ConfidenceTier } from './confidence'
 // truncated an earlier query here down to 8 distinct items out of a
 // real 296, caught live 2026-10-11 while building this exact backfill.
 
-const PAGE_SIZE = 1000
-
-/** Paginates through a PostgREST query, firing every page request in
- *  parallel instead of awaiting one page at a time -- real perf fix,
- *  2026-10-12: getAllFlaggedProducts's query spans ~26 pages even after
- *  scoping to flagged items (they account for nearly the whole table),
- *  and awaiting that sequentially was ~4.3s on every Food Affordability
- *  click -- a contributing cause of the "intermittent" buttons the
- *  operator reported (Next.js's router can appear to drop a click made
- *  while a slow navigation is still in flight). Needs a real row count
- *  up front (build must accept { count: 'exact' } on its first call,
- *  done by the caller), so this isn't a drop-in replacement for a
- *  generic unknown-length pagination helper -- it's specific to this
- *  one query. */
-async function fetchAllRowsParallel<T>(
-  build: (from: number, to: number, withCount: boolean) => Promise<{ data: T[] | null; error: { message: string } | null; count?: number | null }>
-): Promise<T[]> {
-  const first = await build(0, PAGE_SIZE - 1, true)
-  if (first.error) throw new Error(first.error.message)
-  const rows = [...(first.data ?? [])]
-  const total = first.count ?? rows.length
-  const numPages = Math.ceil(total / PAGE_SIZE)
-  if (numPages > 1) {
-    const rest = await Promise.all(
-      Array.from({ length: numPages - 1 }, (_, i) => {
-        const page = i + 1
-        return build(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1, false)
-      })
-    )
-    for (const r of rest) {
-      if (r.error) throw new Error(r.error.message)
-      rows.push(...(r.data ?? []))
-    }
-  }
-  return rows
-}
+// Pagination itself is shared via paginatedQuery.ts's runPaginated --
+// see that file's module doc. This function still wraps its OWN
+// unstable_cache around the whole thing (not paginatedQuery.ts's
+// cachedPaginatedQuery) because it does real prep work (fetching the
+// flagged-item list and basket-food categories) BEFORE pagination can
+// even start -- there's no way to express "prep work, then paginate"
+// through the simpler no-prep wrappers without losing type safety, so
+// this is the one query in the project that calls runPaginated +
+// unstable_cache directly instead of going through a wrapper.
 
 export interface EssentialProduct {
   itemName: string
@@ -172,14 +146,14 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
 
   // Scoped to the real flagged item names at the SQL level (though
   // confirmed live, 2026-10-12: flagged items account for ~84% of the
-  // whole table, so this alone barely helps -- fetchAllRowsParallel is
-  // what actually cut this from ~4.3s to real, click-responsive time,
-  // see its own doc). This used to pull the WHOLE price_observations
+  // whole table, so this alone barely helps -- runPaginated's parallel
+  // pagination is what actually cut this from ~4.3s to real,
+  // click-responsive time). This used to pull the WHOLE price_observations
   // table and filter client-side, which is what made the Food
   // Affordability page feel slow/intermittent (see
   // getAllVariantsGroupedByFood's own doc for the other half of that bug).
   const flaggedNamesArray = Array.from(flaggedNames)
-  const rows = await fetchAllRowsParallel<ObservationRow>((from, to, withCount) => {
+  const rows = await runPaginated<ObservationRow>((from, to, withCount) => {
     const query = supabase
       .from('price_observations')
       .select('item_name, food_id, brand, pack_size, price_cents, chain, observed_at, source', withCount ? { count: 'exact' } : undefined)
@@ -324,3 +298,4 @@ export async function getAllVariantsGroupedByFood(): Promise<Map<string, Essenti
   }
   return byFoodId
 }
+

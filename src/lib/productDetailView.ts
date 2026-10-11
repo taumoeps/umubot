@@ -1,43 +1,16 @@
-import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { confidenceTierForSource, type ConfidenceTier } from './confidence'
+import { cachedPaginatedQueryWithArg } from './paginatedQuery'
 
 // UmuBot -- real price history/today's-prices for one specific observed
 // product (keyed by item_name), reached from a food's product list
-// (src/lib/essentialFoodsView.ts). Paginated with .range() -- PostgREST's
-// default 1000-row cap silently truncates an unpaginated pull, a real
-// bug caught twice in this project.
-//
-// Cached per item_name via unstable_cache -- real perf gap caught live,
-// 2026-10-12, same day as essentialFoodsView.ts's and
-// productCatalogView.ts's versions of this fix: those two cover the
-// Essential/Budget pages and the Grocery catalog, but this file -- the
-// query behind a product detail page's own chart/today's-prices data --
-// was never touched by either, confirmed live: "Free Range Eggs (12pk)"
-// (a product not yet visited this cache window) still took 1-2s to
-// open even after both earlier fixes shipped. The query itself is
-// cheap (scoped to one item_name, rarely more than ~100 rows), so this
-// is mostly real network/connection round-trip cost, not a big pull --
-// but it's still worth caching, since once ANY visitor opens a given
-// product, every other visitor gets it fast for the next 5 minutes
-// too, not just the one who paid the first real cost.
-
-const PAGE_SIZE = 1000
-
-async function fetchAllRows<T>(
-  build: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>
-): Promise<T[]> {
-  const all: T[] = []
-  for (let page = 0; page < 50; page++) {
-    const from = page * PAGE_SIZE
-    const { data, error } = await build(from, from + PAGE_SIZE - 1)
-    if (error) throw new Error(error.message)
-    if (!data || data.length === 0) break
-    all.push(...data)
-    if (data.length < PAGE_SIZE) break
-  }
-  return all
-}
+// (src/lib/essentialFoodsView.ts). Paginated AND cached via
+// paginatedQuery.ts's cachedPaginatedQueryWithArg -- see that file's
+// module doc for why this moved off a local fetchAllRows/unstable_cache
+// pair (found and fixed by hand, 2026-10-12, same day as
+// essentialFoodsView.ts's and productCatalogView.ts's own versions of
+// this exact bug -- all three now share one implementation instead of
+// three that could drift apart again).
 
 export interface TodayPrice {
   chain: string
@@ -83,18 +56,15 @@ interface ProductDetailRow {
   source: string
 }
 
-const getRowsForItem = unstable_cache(
-  async (itemName: string): Promise<ProductDetailRow[]> =>
-    fetchAllRows<ProductDetailRow>((from, to) =>
-      supabase
-        .from('price_observations')
-        .select('chain, store_name, price_cents, promo_flag, observed_at, brand, pack_size, food_id, source')
-        .eq('item_name', itemName)
-        .order('observed_at', { ascending: false })
-        .range(from, to) as unknown as Promise<{ data: ProductDetailRow[] | null; error: { message: string } | null }>
-    ),
+const getRowsForItem = cachedPaginatedQueryWithArg<ProductDetailRow, string>(
   ['product-detail-rows'],
-  { revalidate: 300 }
+  (itemName, from, to, withCount) =>
+    supabase
+      .from('price_observations')
+      .select('chain, store_name, price_cents, promo_flag, observed_at, brand, pack_size, food_id, source', withCount ? { count: 'exact' } : undefined)
+      .eq('item_name', itemName)
+      .order('observed_at', { ascending: false })
+      .range(from, to) as unknown as Promise<{ data: ProductDetailRow[] | null; error: { message: string } | null; count?: number | null }>
 )
 
 export async function getProductDetail(itemName: string): Promise<ProductDetail | null> {

@@ -1,6 +1,6 @@
-import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { mapBasktToCatalog } from './basktTaxonomyMapping'
+import { cachedPaginatedQuery, cachedPaginatedQueryWithArg } from './paginatedQuery'
 
 // UmuBot -- the fuller real grocery catalogue (New World/PAK'nSAVE's
 // own real 13 categories, groceryCatalogTaxonomy.ts), kept deliberately
@@ -24,40 +24,19 @@ import { mapBasktToCatalog } from './basktTaxonomyMapping'
 // now (operator request 2026-10-12: stop copying Pricer's invented
 // subcategory list), not a hand-maintained alias table.
 //
-// Both getCategorySubcategorySummaries and getProductsForSubcategory
-// used to independently re-run the same full category-tagged pull on
-// every call -- real perf bug caught live, 2026-10-12, same day and
-// same root cause as essentialFoodsView.ts's getAllFlaggedProducts fix:
-// a Grocery category page (e.g. Frozen > Frozen Fish & Seafood) took
-// 3.9s-5.5s to open, even on repeat visits to the identical URL,
-// because nothing here was cached -- every page view re-paid the real
-// Supabase round trip. getAllCategoryTaggedRows below is the one
-// cached fetch both now share; getBrandList/getProductsForBrand get
-// their own separate cached fetch (different query, no category
-// filter).
+// Paginated AND cached via paginatedQuery.ts's cachedPaginatedQuery/
+// cachedPaginatedQueryWithArg -- see that file's module doc for why
+// this moved off a local fetchAllRows + unstable_cache pair (found and
+// fixed by hand, 2026-10-12, same day as essentialFoodsView.ts's and
+// productDetailView.ts's own versions of this exact bug -- confirmed
+// live: a Grocery category page took 3.9s-5.5s to open, even on repeat
+// visits, because nothing here was cached).
 //
 // Known gap, flagged rather than silently built around: counts/grouping
 // here are done client-side over every matching row. Fine at current
 // real volume; once the catalog genuinely grows into the thousands-of-
 // products range Pricer operates at, this should become a real SQL
 // aggregate (a view), not a client-side group-by over a full page pull.
-
-const PAGE_SIZE = 1000
-
-async function fetchAllRows<T>(
-  build: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>
-): Promise<T[]> {
-  const all: T[] = []
-  for (let page = 0; page < 50; page++) {
-    const from = page * PAGE_SIZE
-    const { data, error } = await build(from, from + PAGE_SIZE - 1)
-    if (error) throw new Error(error.message)
-    if (!data || data.length === 0) break
-    all.push(...data)
-    if (data.length < PAGE_SIZE) break
-  }
-  return all
-}
 
 interface CatalogRow {
   item_name: string
@@ -73,18 +52,15 @@ interface CatalogRow {
 /** Every real price_observations row that carries a real Baskt
  *  category/subcategory tag -- the one shared, cached fetch behind both
  *  getCategorySubcategorySummaries and getProductsForSubcategory. */
-const getAllCategoryTaggedRows = unstable_cache(
-  async (): Promise<CatalogRow[]> =>
-    fetchAllRows<CatalogRow>((from, to) =>
-      supabase
-        .from('price_observations')
-        .select('item_name, brand, pack_size, price_cents, chain, observed_at, baskt_category, baskt_subcategory')
-        .not('baskt_category', 'is', null)
-        .not('baskt_subcategory', 'is', null)
-        .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null }>
-    ),
+const getAllCategoryTaggedRows = cachedPaginatedQuery<CatalogRow>(
   ['catalog-category-tagged-rows'],
-  { revalidate: 300 }
+  (from, to, withCount) =>
+    supabase
+      .from('price_observations')
+      .select('item_name, brand, pack_size, price_cents, chain, observed_at, baskt_category, baskt_subcategory', withCount ? { count: 'exact' } : undefined)
+      .not('baskt_category', 'is', null)
+      .not('baskt_subcategory', 'is', null)
+      .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null; count?: number | null }>
 )
 
 export interface SubcategorySummary {
@@ -218,17 +194,14 @@ interface BrandGroupRow {
  *  cached fetch behind both getBrandList and getProductsForBrand, same
  *  "one expensive query, cached, not re-run per caller" pattern as
  *  getAllCategoryTaggedRows above. */
-const getAllBrandedRows = unstable_cache(
-  async (): Promise<BrandGroupRow[]> =>
-    fetchAllRows<BrandGroupRow>((from, to) =>
-      supabase
-        .from('price_observations')
-        .select('brand, item_name, chain')
-        .not('brand', 'is', null)
-        .range(from, to) as unknown as Promise<{ data: BrandGroupRow[] | null; error: { message: string } | null }>
-    ),
+const getAllBrandedRows = cachedPaginatedQuery<BrandGroupRow>(
   ['catalog-branded-rows'],
-  { revalidate: 300 }
+  (from, to, withCount) =>
+    supabase
+      .from('price_observations')
+      .select('brand, item_name, chain', withCount ? { count: 'exact' } : undefined)
+      .not('brand', 'is', null)
+      .range(from, to) as unknown as Promise<{ data: BrandGroupRow[] | null; error: { message: string } | null; count?: number | null }>
 )
 
 export async function getBrandList(): Promise<CatalogBrand[]> {
@@ -247,17 +220,14 @@ export async function getBrandList(): Promise<CatalogBrand[]> {
     .sort((a, b) => a.brand.localeCompare(b.brand))
 }
 
-const getRowsForBrand = unstable_cache(
-  async (brand: string): Promise<CatalogRow[]> =>
-    fetchAllRows<CatalogRow>((from, to) =>
-      supabase
-        .from('price_observations')
-        .select('item_name, brand, pack_size, price_cents, chain, observed_at')
-        .eq('brand', brand)
-        .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null }>
-    ),
+const getRowsForBrand = cachedPaginatedQueryWithArg<CatalogRow, string>(
   ['catalog-rows-for-brand'],
-  { revalidate: 300 }
+  (brand, from, to, withCount) =>
+    supabase
+      .from('price_observations')
+      .select('item_name, brand, pack_size, price_cents, chain, observed_at', withCount ? { count: 'exact' } : undefined)
+      .eq('brand', brand)
+      .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null; count?: number | null }>
 )
 
 export async function getProductsForBrand(brand: string): Promise<CatalogProduct[]> {
