@@ -10,7 +10,7 @@ import { usePathname } from 'next/navigation'
 // secondary section for future growth rather than deleted (operator
 // decision: keep it to introduce later, don't throw the code away).
 const links = [
-  { href: '/', label: 'Essential Foods', icon: '▣' },
+  { href: '/', label: 'Essential', icon: '▣' },
   { href: '/products', label: 'Products', icon: '▦' },
   { href: '/price-index', label: 'Price Index', icon: '◈' },
 ]

@@ -61,7 +61,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   return (
     <div>
       <p className="text-sm text-gray-500 mb-4">
-        <Link href="/" className="hover:text-green-600">Essential Foods</Link>
+        <Link href="/" className="hover:text-green-600">Essential</Link>
         {detail.foodId && foodDisplayName && (
           <>
             <span className="mx-2">›</span>

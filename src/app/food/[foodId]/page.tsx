@@ -26,7 +26,7 @@ export default async function FoodDetailPage({ params }: { params: Promise<{ foo
   return (
     <div>
       <p className="text-sm text-gray-500 mb-1">
-        <Link href="/" className="hover:text-green-600">Essential Foods</Link>
+        <Link href="/" className="hover:text-green-600">Essential</Link>
         <span className="mx-2">›</span>
         {categoryLabel}
       </p>

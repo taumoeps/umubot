@@ -18,7 +18,7 @@ export default async function HomePage() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-800 mb-1">Essential Foods</h2>
+      <h2 className="text-2xl font-bold text-gray-800 mb-1">Essential</h2>
       <p className="text-sm text-gray-500 mb-1 max-w-2xl">
         Not a full supermarket catalogue — {totalFoods} real essential foods, tracked honestly.
         {' '}{totalTracked} currently have real New Zealand price data.
