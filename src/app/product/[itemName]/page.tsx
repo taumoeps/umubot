@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getProductDetail } from '@/lib/productDetailView'
+import { getOtherVariants } from '@/lib/essentialFoodsView'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
 
 // UmuBot -- product detail page. Deliberately NOT Pricer's layout
@@ -46,6 +47,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const itemName = decodeURIComponent(encoded)
   const detail = await getProductDetail(itemName)
   if (!detail) notFound()
+
+  const otherVariants = detail.foodId ? await getOtherVariants(detail.foodId, detail.itemName) : []
 
   const atLowest = detail.todayByChain.some((t) => t.priceCents === detail.lowestEverCents)
   const sameDay = detail.historyStartDate === detail.historyEndDate
@@ -121,6 +124,30 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           ))}
         </div>
       </div>
+
+      {otherVariants.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-6">
+          <div className="px-5 py-3 border-b border-gray-100">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Other sizes & brands</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Cheapest to most expensive</p>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {otherVariants.map((v) => (
+              <Link
+                key={v.itemName}
+                href={`/product/${encodeURIComponent(v.itemName)}`}
+                className="flex items-center justify-between px-5 py-3 hover:bg-gray-50"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{v.itemName}</p>
+                  <p className="text-xs text-gray-400 truncate">{v.brand ?? 'No brand recorded'}</p>
+                </div>
+                <p className="text-lg font-bold text-gray-800 shrink-0 ml-4">${(v.lowestPriceCents / 100).toFixed(2)}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
