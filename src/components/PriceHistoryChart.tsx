@@ -4,6 +4,21 @@ import type { ChainHistory } from '@/lib/productDetailView'
 // not a charting library (none installed). Plots only real data points
 // -- a chain missing a day is a gap in its line, never interpolated or
 // faked.
+//
+// Labels and dots are real HTML overlays, not SVG <text>/<circle> --
+// real bug caught live, 2026-10-12: this page has no max-width (see
+// layout.tsx), so on a wide screen the SVG (a fixed 800x260 viewBox,
+// stretched via w-full) could render 1.5-2x larger than its native
+// size, and SVG fontSize/stroke-width/radius are specified in viewBox
+// units, so they scaled up right along with it -- "the graph fonts and
+// lines too big compared to the rest of the page" was a real,
+// reproducible rendering bug, not a one-off. HTML text/dots use the
+// page's own font-size scale and render at a consistent size
+// regardless of the container's actual width; only the gridlines and
+// connecting line (genuinely fine to scale with the plot area, like
+// any responsive chart) stay in SVG, using a percentage-based 0-100
+// viewBox so both coordinate systems share the same plain
+// left/top percentages.
 
 const CHAIN_COLORS: Record<string, string> = {
   paknsave: '#eab308',
@@ -19,11 +34,12 @@ const CHAIN_LABELS: Record<string, string> = {
 }
 const FALLBACK_COLOR = '#9ca3af'
 
-const WIDTH = 800
-const HEIGHT = 260
-const MARGIN = { top: 16, right: 16, bottom: 28, left: 56 }
-const PLOT_W = WIDTH - MARGIN.left - MARGIN.right
-const PLOT_H = HEIGHT - MARGIN.top - MARGIN.bottom
+// Percentages of the plot box's own width/height -- converted from the
+// original fixed-pixel 800x260 margins (left 56/800, right 16/800, top
+// 16/260, bottom 28/260), so the proportions look the same as before.
+const MARGIN = { top: 6, right: 2, bottom: 11, left: 7 }
+const PLOT_W = 100 - MARGIN.left - MARGIN.right
+const PLOT_H = 100 - MARGIN.top - MARGIN.bottom
 
 export default function PriceHistoryChart({ history }: { history: ChainHistory[] }) {
   const allDates = Array.from(new Set(history.flatMap((h) => h.points.map((p) => p.date)))).sort()
@@ -59,46 +75,61 @@ export default function PriceHistoryChart({ history }: { history: ChainHistory[]
           )
         })}
       </div>
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full h-auto" role="img" aria-label="Price history chart">
-        <rect x="0" y="0" width={WIDTH} height={HEIGHT} fill="white" />
-        {yTicks.map((price, i) => (
-          <g key={i}>
+      <div className="relative w-full" style={{ aspectRatio: '800 / 260' }}>
+        <svg
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="absolute inset-0 w-full h-full"
+          role="img"
+          aria-label="Price history chart"
+        >
+          {yTicks.map((price, i) => (
             <line
+              key={i}
               x1={MARGIN.left}
-              x2={WIDTH - MARGIN.right}
+              x2={100 - MARGIN.right}
               y1={yFor(price)}
               y2={yFor(price)}
               stroke="#f3f4f6"
               strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
             />
-            <text x={MARGIN.left - 8} y={yFor(price) + 4} fontSize="11" fill="#9ca3af" textAnchor="end">
-              ${(price / 100).toFixed(2)}
-            </text>
-          </g>
+          ))}
+          {history.map((h) => {
+            if (h.points.length < 2) return null
+            const color = CHAIN_COLORS[h.chain] ?? FALLBACK_COLOR
+            const d = h.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.date).toFixed(2)} ${yFor(p.minPriceCents).toFixed(2)}`).join(' ')
+            return <path key={h.chain} d={d} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+          })}
+        </svg>
+
+        {yTicks.map((price, i) => (
+          <span
+            key={i}
+            className="absolute text-xs text-gray-400 pr-1 text-right"
+            style={{ left: 0, width: `${MARGIN.left}%`, top: `${yFor(price)}%`, transform: 'translateY(-50%)' }}
+          >
+            ${(price / 100).toFixed(2)}
+          </span>
         ))}
-        <text x={MARGIN.left} y={HEIGHT - 6} fontSize="11" fill="#9ca3af" textAnchor="start">
+        <span className="absolute text-xs text-gray-400" style={{ left: `${MARGIN.left}%`, bottom: 0 }}>
           {allDates[0]}
-        </text>
-        <text x={WIDTH - MARGIN.right} y={HEIGHT - 6} fontSize="11" fill="#9ca3af" textAnchor="end">
+        </span>
+        <span className="absolute text-xs text-gray-400" style={{ right: `${MARGIN.right}%`, bottom: 0 }}>
           {allDates[allDates.length - 1]}
-        </text>
-        {history.map((h) => {
+        </span>
+
+        {history.flatMap((h) => {
           const color = CHAIN_COLORS[h.chain] ?? FALLBACK_COLOR
-          if (h.points.length === 1) {
-            const p = h.points[0]
-            return <circle key={h.chain} cx={xFor(p.date)} cy={yFor(p.minPriceCents)} r="4" fill={color} />
-          }
-          const d = h.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(p.date).toFixed(1)} ${yFor(p.minPriceCents).toFixed(1)}`).join(' ')
-          return (
-            <g key={h.chain}>
-              <path d={d} fill="none" stroke={color} strokeWidth="2" />
-              {h.points.map((p) => (
-                <circle key={p.date} cx={xFor(p.date)} cy={yFor(p.minPriceCents)} r="3" fill={color} />
-              ))}
-            </g>
-          )
+          return h.points.map((p) => (
+            <span
+              key={`${h.chain}-${p.date}`}
+              className="absolute w-2 h-2 rounded-full -translate-x-1/2 -translate-y-1/2"
+              style={{ left: `${xFor(p.date)}%`, top: `${yFor(p.minPriceCents)}%`, backgroundColor: color }}
+            />
+          ))
         })}
-      </svg>
+      </div>
     </div>
   )
 }
