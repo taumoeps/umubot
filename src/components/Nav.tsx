@@ -2,10 +2,9 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-// Public nav -- no auth, no sign-out. Rebuilt 2026-10-11 (operator
-// decision to differentiate from Pricer): "Essential Foods" (a narrow,
-// honest list of real foods) is the primary identity now, not a copy
-// of Pricer's full catalogue. "Products" -- the fuller Pricer-
+// Public nav -- no auth, no sign-out. "Essential" (real products
+// individually flagged essential) is the primary identity now, not a
+// copy of Pricer's full catalogue. "Products" -- the fuller Pricer-
 // structured catalogue, including Brands -- is kept as a real, working
 // secondary section for future growth rather than deleted (operator
 // decision: keep it to introduce later, don't throw the code away).
@@ -25,13 +24,13 @@ export default function Nav() {
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {links.map(({ href, label, icon }) => {
-          // '/' owns /food/* (Essential Foods browsing); '/products' owns
-          // its own /products/* subtree (category/brand browsing).
-          // '/product/[itemName]' is reachable from both and doesn't
-          // highlight either -- it's genuinely shared, not owned by one.
-          const isActive = href === '/'
-            ? pathname === '/' || pathname.startsWith('/food/')
-            : pathname === href || pathname.startsWith(`${href}/`)
+          // '/' is active on an EXACT match only -- pathname.startsWith('/')
+          // is trivially true for every path, so that shortcut (used for
+          // every other href here) would wrongly make '/' always active.
+          // '/products' owns its own /products/* subtree. '/product/[x]'
+          // is reachable from both and doesn't highlight either -- it's
+          // genuinely shared, not owned by one.
+          const isActive = href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`)
           return (
             <Link
               key={href}

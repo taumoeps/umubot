@@ -1,7 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getProductDetail } from '@/lib/productDetailView'
-import { supabase } from '@/lib/supabase'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
 
 // UmuBot -- product detail page. Deliberately NOT Pricer's layout
@@ -48,12 +47,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const detail = await getProductDetail(itemName)
   if (!detail) notFound()
 
-  let foodDisplayName: string | null = null
-  if (detail.foodId) {
-    const { data: food } = await supabase.from('essential_foods').select('display_name').eq('id', detail.foodId).maybeSingle()
-    foodDisplayName = (food as { display_name: string } | null)?.display_name ?? null
-  }
-
   const atLowest = detail.todayByChain.some((t) => t.priceCents === detail.lowestEverCents)
   const sameDay = detail.historyStartDate === detail.historyEndDate
   const cheapest = detail.todayByChain.find((t) => t.isCheapest)
@@ -62,12 +55,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     <div>
       <p className="text-sm text-gray-500 mb-4">
         <Link href="/" className="hover:text-green-600">Essential</Link>
-        {detail.foodId && foodDisplayName && (
-          <>
-            <span className="mx-2">›</span>
-            <Link href={`/food/${encodeURIComponent(detail.foodId)}`} className="hover:text-green-600">{foodDisplayName}</Link>
-          </>
-        )}
       </p>
 
       <div className="flex items-start gap-4 mb-6">
