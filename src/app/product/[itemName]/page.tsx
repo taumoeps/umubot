@@ -4,21 +4,26 @@ import { getProductDetail } from '@/lib/productDetailView'
 import { supabase } from '@/lib/supabase'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
 
-// UmuBot -- product detail page: Today's prices + Price outlook,
-// Price history chart. Keyed by the real observed item_name.
+// UmuBot -- product detail page. Deliberately NOT Pricer's layout
+// (operator decision, 2026-10-11, after a direct side-by-side
+// comparison): Pricer leads with a "Today's prices" card grid + a
+// sidebar "Price outlook" card, with the chart stacked underneath as
+// an afterthought. That hierarchy says "price comparison tool, chart
+// optional". UmuBot's actual thesis is the opposite -- the real
+// observation history IS the product, not a footnote -- so this page
+// leads with the chart as the hero, compresses the lowest/current
+// stats into inline chips under it instead of a separate sidebar card,
+// and turns "where to buy now" into a compact utility list at the
+// BOTTOM instead of Pricer's card-grid hero at the top.
 //
 // What's real vs honestly flagged:
 // - No product image -- nothing real to show one from, so a plain
 //   placeholder square, not a stock photo.
-// - "Today's prices" shows each chain's most recent REAL observation,
-//   which may be days old -- the real date is shown on each row rather
-//   than implying it's literally today's price. Each row is tagged
-//   Live or Estimated (src/lib/confidence.ts) -- the real differentiator
-//   from Pricer, operator decision 2026-10-11: say which prices were
-//   actually seen vs estimated, which Pricer's UI never does.
-// - "Price outlook" reports a real lowest-ever price and the real date
-//   range behind it, not a fixed "30-day low" -- actual history here is
-//   often shorter than 30 days.
+// - Each store row is tagged Live or Estimated (src/lib/confidence.ts)
+//   -- says which prices were actually seen vs estimated, which
+//   Pricer's UI never does.
+// - "Lowest observed" reports a real date range, not a fixed "30-day
+//   low" -- actual history here is often shorter than 30 days.
 
 export const revalidate = 300
 
@@ -51,6 +56,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   const atLowest = detail.todayByChain.some((t) => t.priceCents === detail.lowestEverCents)
   const sameDay = detail.historyStartDate === detail.historyEndDate
+  const cheapest = detail.todayByChain.find((t) => t.isCheapest)
 
   return (
     <div>
@@ -79,72 +85,53 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-200">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Today&apos;s prices</h3>
-          </div>
-          <div className="divide-y divide-gray-100">
-            {detail.todayByChain.map((t) => (
-              <div key={t.chain} className="flex items-center justify-between px-5 py-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-gray-800">{CHAIN_LABELS[t.chain] ?? t.chain}</span>
-                    {t.isCheapest && (
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Cheapest</span>
-                    )}
-                    <TierBadge tier={t.tier} />
-                  </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {t.storeName} · as of {new Date(t.observedAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <p className="text-2xl font-bold text-gray-800">${(t.priceCents / 100).toFixed(2)}</p>
-              </div>
-            ))}
-          </div>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Real price timeline</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Real minimum price per day per chain — no estimated or interpolated points</p>
         </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">Price outlook</h3>
-          <p className="text-xs text-gray-400 mb-4">Computed from real observed prices — not an AI estimate</p>
-          {atLowest ? (
-            <>
-              <p className="text-sm font-semibold text-green-700 mb-1">At its lowest real observed price</p>
-              <p className="text-xs text-gray-500">
-                Matches the lowest price seen in real history ({detail.historyStartDate}
-                {!sameDay && ` – ${detail.historyEndDate}`}).
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-sm font-semibold text-gray-700 mb-1">Above its lowest real observed price</p>
-              <p className="text-xs text-gray-500">
-                Lowest real price seen was ${(detail.lowestEverCents / 100).toFixed(2)} on {detail.lowestEverDate}.
-              </p>
-            </>
-          )}
-          <div className="mt-4 pt-4 border-t border-gray-100">
+        <div className="px-5 pt-4">
+          <PriceHistoryChart history={detail.history} />
+        </div>
+        <div className="flex flex-wrap gap-3 px-5 pb-5 pt-2">
+          <div className="flex-1 min-w-[200px] rounded-lg bg-gray-50 px-4 py-3">
             <p className="text-xs text-gray-400">Lowest observed</p>
-            <p className="text-xl font-bold text-gray-800">${(detail.lowestEverCents / 100).toFixed(2)}</p>
-            <p className="text-xs text-gray-400">{detail.lowestEverDate}</p>
+            <p className="text-lg font-bold text-gray-800">
+              ${(detail.lowestEverCents / 100).toFixed(2)}
+              <span className="text-xs font-normal text-gray-400 ml-1">on {detail.lowestEverDate}</span>
+            </p>
           </div>
-          <div className="mt-3 pt-3 border-t border-gray-100">
-            <p className="text-xs text-gray-400">
-              Real history window: {detail.historyStartDate}
-              {!sameDay && ` to ${detail.historyEndDate}`}
+          <div className="flex-1 min-w-[200px] rounded-lg bg-gray-50 px-4 py-3">
+            <p className="text-xs text-gray-400">Right now</p>
+            <p className={`text-sm font-semibold ${atLowest ? 'text-green-700' : 'text-gray-700'}`}>
+              {atLowest ? 'At its lowest observed price' : `$${((cheapest?.priceCents ?? 0) / 100).toFixed(2)} above lowest`}
+            </p>
+          </div>
+          <div className="flex-1 min-w-[200px] rounded-lg bg-gray-50 px-4 py-3">
+            <p className="text-xs text-gray-400">Real history window</p>
+            <p className="text-sm font-medium text-gray-700">
+              {detail.historyStartDate}{!sameDay && ` – ${detail.historyEndDate}`}
             </p>
           </div>
         </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-200">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Price history</h3>
-          <p className="text-xs text-gray-400 mt-0.5">Real minimum price per day per chain — no estimated or interpolated points</p>
+        <div className="px-5 py-3 border-b border-gray-100">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Where to buy now</h3>
         </div>
-        <div className="px-5 py-4">
-          <PriceHistoryChart history={detail.history} />
+        <div className="divide-y divide-gray-100">
+          {detail.todayByChain.map((t) => (
+            <div key={t.chain} className="flex items-center justify-between px-5 py-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-medium text-gray-800">{CHAIN_LABELS[t.chain] ?? t.chain}</span>
+                {t.isCheapest && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Cheapest</span>}
+                <TierBadge tier={t.tier} />
+                <span className="text-xs text-gray-400 truncate">{t.storeName} · as of {new Date(t.observedAt).toLocaleDateString()}</span>
+              </div>
+              <p className="text-lg font-bold text-gray-800 shrink-0 ml-4">${(t.priceCents / 100).toFixed(2)}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>
