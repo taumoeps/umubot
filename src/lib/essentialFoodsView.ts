@@ -54,19 +54,39 @@ import { confidenceTierForSource, type ConfidenceTier } from './confidence'
 
 const PAGE_SIZE = 1000
 
-async function fetchAllRows<T>(
-  build: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>
+/** Paginates through a PostgREST query, firing every page request in
+ *  parallel instead of awaiting one page at a time -- real perf fix,
+ *  2026-10-12: getAllFlaggedProducts's query spans ~26 pages even after
+ *  scoping to flagged items (they account for nearly the whole table),
+ *  and awaiting that sequentially was ~4.3s on every Food Affordability
+ *  click -- a contributing cause of the "intermittent" buttons the
+ *  operator reported (Next.js's router can appear to drop a click made
+ *  while a slow navigation is still in flight). Needs a real row count
+ *  up front (build must accept { count: 'exact' } on its first call,
+ *  done by the caller), so this isn't a drop-in replacement for a
+ *  generic unknown-length pagination helper -- it's specific to this
+ *  one query. */
+async function fetchAllRowsParallel<T>(
+  build: (from: number, to: number, withCount: boolean) => Promise<{ data: T[] | null; error: { message: string } | null; count?: number | null }>
 ): Promise<T[]> {
-  const all: T[] = []
-  for (let page = 0; page < 50; page++) {
-    const from = page * PAGE_SIZE
-    const { data, error } = await build(from, from + PAGE_SIZE - 1)
-    if (error) throw new Error(error.message)
-    if (!data || data.length === 0) break
-    all.push(...data)
-    if (data.length < PAGE_SIZE) break
+  const first = await build(0, PAGE_SIZE - 1, true)
+  if (first.error) throw new Error(first.error.message)
+  const rows = [...(first.data ?? [])]
+  const total = first.count ?? rows.length
+  const numPages = Math.ceil(total / PAGE_SIZE)
+  if (numPages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: numPages - 1 }, (_, i) => {
+        const page = i + 1
+        return build(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1, false)
+      })
+    )
+    for (const r of rest) {
+      if (r.error) throw new Error(r.error.message)
+      rows.push(...(r.data ?? []))
+    }
   }
-  return all
+  return rows
 }
 
 export interface EssentialProduct {
@@ -130,13 +150,24 @@ async function getAllFlaggedProducts(): Promise<FlaggedProduct[]> {
   const categoryByFoodId = new Map(((basketFoodsResult.data ?? []) as BasketFoodRow[]).map((f) => [f.id, f.category]))
   if (categoryByFoodId.size === 0) return []
 
-  const rows = await fetchAllRows<ObservationRow>((from, to) =>
-    supabase
+  // Scoped to the real flagged item names at the SQL level (though
+  // confirmed live, 2026-10-12: flagged items account for ~84% of the
+  // whole table, so this alone barely helps -- fetchAllRowsParallel is
+  // what actually cut this from ~4.3s to real, click-responsive time,
+  // see its own doc). This used to pull the WHOLE price_observations
+  // table and filter client-side, which is what made the Food
+  // Affordability page feel slow/intermittent (see
+  // getAllVariantsGroupedByFood's own doc for the other half of that bug).
+  const flaggedNamesArray = Array.from(flaggedNames)
+  const rows = await fetchAllRowsParallel<ObservationRow>((from, to, withCount) => {
+    const query = supabase
       .from('price_observations')
-      .select('item_name, food_id, brand, pack_size, price_cents, chain, observed_at, source')
-      .range(from, to) as unknown as Promise<{ data: ObservationRow[] | null; error: { message: string } | null }>
-  )
-  const relevant = rows.filter((r) => flaggedNames.has(r.item_name) && categoryByFoodId.has(r.food_id))
+      .select('item_name, food_id, brand, pack_size, price_cents, chain, observed_at, source', withCount ? { count: 'exact' } : undefined)
+      .in('item_name', flaggedNamesArray)
+      .range(from, to)
+    return query as unknown as Promise<{ data: ObservationRow[] | null; error: { message: string } | null; count?: number | null }>
+  })
+  const relevant = rows.filter((r) => categoryByFoodId.has(r.food_id))
 
   // Per item: use ONLY its live-tier rows when it has any, else fall
   // back to its estimated rows -- never mix the two for one item.
@@ -244,8 +275,32 @@ export async function getOtherVariants(foodId: string, excludeItemName: string):
  *  by price -- for a caller (the meal affordability engine) that needs
  *  to pick its OWN "best" representative by a different rule than
  *  "cheapest", e.g. preferring a plain ingredient (Kumara, not Kumara
- *  Fries) over whatever happens to be the lowest-priced flagged variant. */
+ *  Fries) over whatever happens to be the lowest-priced flagged variant.
+ *  Calling this per food in a loop/Promise.all is a real perf trap --
+ *  see getAllVariantsGroupedByFood below -- use that instead when more
+ *  than one food is needed in the same request. */
 export async function getAllVariantsForFood(foodId: string): Promise<EssentialProduct[]> {
   const allProducts = await getAllFlaggedProducts()
   return allProducts.filter((p) => p.foodId === foodId)
+}
+
+/** Same real data as getAllVariantsForFood, grouped by food_id, for a
+ *  caller that needs several foods' variants in one request (the meal
+ *  affordability engine resolving ~20 ingredients). Real bug caught
+ *  live, 2026-10-12: resolveAllIngredients originally called
+ *  getAllVariantsForFood once per ingredient in Promise.all, and each
+ *  call independently re-ran getAllFlaggedProducts()'s full paginated
+ *  price_observations pull (~31,000 rows, 31 requests) -- 20 ingredients
+ *  meant 20 full-table scans on every single click on the Food
+ *  Affordability page, which is what made it feel slow/intermittent.
+ *  This does the expensive pull exactly ONCE per request, however many
+ *  foods are asked for. */
+export async function getAllVariantsGroupedByFood(): Promise<Map<string, EssentialProduct[]>> {
+  const allProducts = await getAllFlaggedProducts()
+  const byFoodId = new Map<string, EssentialProduct[]>()
+  for (const p of allProducts) {
+    if (!byFoodId.has(p.foodId)) byFoodId.set(p.foodId, [])
+    byFoodId.get(p.foodId)!.push(p)
+  }
+  return byFoodId
 }

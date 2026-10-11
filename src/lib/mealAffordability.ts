@@ -1,4 +1,5 @@
-import { getAllVariantsForFood, type EssentialProduct } from './essentialFoodsView'
+import { unstable_cache } from 'next/cache'
+import { getAllVariantsGroupedByFood, type EssentialProduct } from './essentialFoodsView'
 
 // UmuBot -- Food Affordability / Meal Budgets engine. Operator request,
 // 2026-10-12, replacing Price Index in the nav: "how many meals can I
@@ -165,9 +166,13 @@ export interface IngredientReference {
  *  parseable weight, cheapest among those; (2) a plain-named product
  *  needing an assumed unit weight; (3) any weight-resolvable product at
  *  all (marked isSubstitute). Returns null only if NOTHING for this
- *  food has any resolvable weight in either tier. */
-async function pickIngredientProduct(foodId: string): Promise<IngredientReference | null> {
-  const variants = await getAllVariantsForFood(foodId)
+ *  food has any resolvable weight in either tier. Takes the food's
+ *  variants pre-fetched (see resolveAllIngredients) -- calling
+ *  getAllVariantsForFood per food here was a real perf bug, caught
+ *  live: each call independently re-ran the full flagged-products
+ *  query, so resolving ~20 ingredients meant the same expensive query
+ *  running 20 times over on every click on the Food Affordability page. */
+function pickIngredientProduct(foodId: string, variants: EssentialProduct[]): IngredientReference | null {
   const withWeight = variants
     .map((v) => ({ v, w: resolveWeight(v.packSize, foodId) }))
     .filter((x): x is { v: EssentialProduct; w: ResolvedWeight } => x.w !== null)
@@ -191,17 +196,41 @@ async function pickIngredientProduct(foodId: string): Promise<IngredientReferenc
   }
 }
 
+/** The actual expensive work, cached ACROSS requests (and across every
+ *  budget/tab URL on the Food Affordability page) via unstable_cache --
+ *  real perf fix, 2026-10-12. The Food Affordability page's own
+ *  revalidate=300 only caches each exact URL (?tab=budgets&budget=4000
+ *  vs ?budget=6000 are different pages to Next.js's router cache), but
+ *  this computation doesn't depend on budget or tab at all -- every
+ *  click was re-running the full real-price resolution from scratch.
+ *  That, even after the N+1 and pagination fixes alongside this one,
+ *  still took several real seconds (a genuine Supabase round trip for
+ *  ~26,000 rows), long enough that a second click before the first
+ *  finished could look like a dropped/broken button -- the "intermittent"
+ *  behaviour the operator reported. Returns a plain array (not a Map --
+ *  Next.js's Data Cache needs a JSON-serialisable value) that the public
+ *  resolveAllIngredients below turns back into a Map. */
+const getCachedIngredientEntries = unstable_cache(
+  async (foodIds: string[]): Promise<[string, IngredientReference][]> => {
+    const variantsByFood = await getAllVariantsGroupedByFood()
+    const entries: [string, IngredientReference][] = []
+    for (const foodId of foodIds) {
+      const ref = pickIngredientProduct(foodId, variantsByFood.get(foodId) ?? [])
+      if (ref) entries.push([foodId, ref])
+    }
+    return entries
+  },
+  ['meal-affordability-ingredients'],
+  { revalidate: 300 }
+)
+
 /** Resolves an ingredient reference for every real essential food that
- *  has at least one usable flagged variant. Call once per request and
- *  reuse across all meal/budget calculations -- each lookup does a
- *  real Supabase query. */
+ *  has at least one usable flagged variant. Cheap to call from every
+ *  budget tier/tab -- the real work happens at most once per 5 minutes
+ *  (see getCachedIngredientEntries). */
 export async function resolveAllIngredients(foodIds: string[]): Promise<Map<string, IngredientReference>> {
-  const entries = await Promise.all(foodIds.map(async (id) => [id, await pickIngredientProduct(id)] as const))
-  const map = new Map<string, IngredientReference>()
-  for (const [id, ref] of entries) {
-    if (ref) map.set(id, ref)
-  }
-  return map
+  const entries = await getCachedIngredientEntries(foodIds)
+  return new Map(entries)
 }
 
 /** Real per-gram cost (cents) of an ingredient, from its real resolved
