@@ -1,12 +1,26 @@
+import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { confidenceTierForSource, type ConfidenceTier } from './confidence'
 
 // UmuBot -- real price history/today's-prices for one specific observed
-// product (keyed by item_name, e.g. "Spaghetti Pasta (500g)"), reached
-// from a food's product list (src/lib/essentialFoodsView.ts). Paginated
-// with .range() -- PostgREST's default 1000-row cap silently truncates
-// an unpaginated pull, a real bug caught twice in the mosaro codebase
-// this was split out of.
+// product (keyed by item_name), reached from a food's product list
+// (src/lib/essentialFoodsView.ts). Paginated with .range() -- PostgREST's
+// default 1000-row cap silently truncates an unpaginated pull, a real
+// bug caught twice in this project.
+//
+// Cached per item_name via unstable_cache -- real perf gap caught live,
+// 2026-10-12, same day as essentialFoodsView.ts's and
+// productCatalogView.ts's versions of this fix: those two cover the
+// Essential/Budget pages and the Grocery catalog, but this file -- the
+// query behind a product detail page's own chart/today's-prices data --
+// was never touched by either, confirmed live: "Free Range Eggs (12pk)"
+// (a product not yet visited this cache window) still took 1-2s to
+// open even after both earlier fixes shipped. The query itself is
+// cheap (scoped to one item_name, rarely more than ~100 rows), so this
+// is mostly real network/connection round-trip cost, not a big pull --
+// but it's still worth caching, since once ANY visitor opens a given
+// product, every other visitor gets it fast for the next 5 minutes
+// too, not just the one who paid the first real cost.
 
 const PAGE_SIZE = 1000
 
@@ -49,19 +63,8 @@ export interface ProductDetail {
   brand: string | null
   packSize: string | null
   foodId: string | null
-  /** Most recent real observation per chain -- "Today's prices", but
-   *  real observed dates are shown rather than assumed to be literally
-   *  today -- see the product page for why. Each row carries its real
-   *  confidence tier (live vs estimated, src/lib/confidence.ts). */
   todayByChain: TodayPrice[]
-  /** Real min-price-per-day per chain, for the price history chart. Not
-   *  raw per-store rows -- a generic item can match 50+ real stores per
-   *  sync, which isn't a time series, it's same-day coverage; charting
-   *  per-chain-per-day is the real signal without that noise. */
   history: ChainHistory[]
-  /** Real lowest price ever observed for this item, across all real
-   *  history. Real history is often short, so the actual window is
-   *  reported alongside the number rather than assumed. */
   lowestEverCents: number
   lowestEverDate: string
   historyStartDate: string
@@ -80,20 +83,26 @@ interface ProductDetailRow {
   source: string
 }
 
+const getRowsForItem = unstable_cache(
+  async (itemName: string): Promise<ProductDetailRow[]> =>
+    fetchAllRows<ProductDetailRow>((from, to) =>
+      supabase
+        .from('price_observations')
+        .select('chain, store_name, price_cents, promo_flag, observed_at, brand, pack_size, food_id, source')
+        .eq('item_name', itemName)
+        .order('observed_at', { ascending: false })
+        .range(from, to) as unknown as Promise<{ data: ProductDetailRow[] | null; error: { message: string } | null }>
+    ),
+  ['product-detail-rows'],
+  { revalidate: 300 }
+)
+
 export async function getProductDetail(itemName: string): Promise<ProductDetail | null> {
-  const rows = await fetchAllRows<ProductDetailRow>((from, to) =>
-    supabase
-      .from('price_observations')
-      .select('chain, store_name, price_cents, promo_flag, observed_at, brand, pack_size, food_id, source')
-      .eq('item_name', itemName)
-      .order('observed_at', { ascending: false })
-      .range(from, to) as unknown as Promise<{ data: ProductDetailRow[] | null; error: { message: string } | null }>
-  )
+  const rows = await getRowsForItem(itemName)
   if (rows.length === 0) return null
 
   const first = rows[0]
 
-  // Today's prices: most recent real observation per chain.
   const latestByChain = new Map<string, (typeof rows)[number]>()
   for (const r of rows) {
     const key = r.chain ?? r.store_name
@@ -112,7 +121,6 @@ export async function getProductDetail(itemName: string): Promise<ProductDetail 
     }))
     .sort((a, b) => a.priceCents - b.priceCents)
 
-  // Price history: real min price per (chain, day).
   const byChainDay = new Map<string, Map<string, number>>()
   for (const r of rows) {
     const chain = r.chain ?? r.store_name
