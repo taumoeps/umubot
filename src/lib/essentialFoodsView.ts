@@ -239,3 +239,13 @@ export async function getOtherVariants(foodId: string, excludeItemName: string):
     .filter((p) => p.foodId === foodId && p.itemName !== excludeItemName)
     .sort((a, b) => a.lowestPriceCents - b.lowestPriceCents)
 }
+
+/** Every real flagged variant of one essential-food concept, unsorted
+ *  by price -- for a caller (the meal affordability engine) that needs
+ *  to pick its OWN "best" representative by a different rule than
+ *  "cheapest", e.g. preferring a plain ingredient (Kumara, not Kumara
+ *  Fries) over whatever happens to be the lowest-priced flagged variant. */
+export async function getAllVariantsForFood(foodId: string): Promise<EssentialProduct[]> {
+  const allProducts = await getAllFlaggedProducts()
+  return allProducts.filter((p) => p.foodId === foodId)
+}

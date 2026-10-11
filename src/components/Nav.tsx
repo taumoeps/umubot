@@ -8,10 +8,14 @@ import { usePathname } from 'next/navigation'
 // structured catalogue, including Brands -- is kept as a real, working
 // secondary section for future growth rather than deleted (operator
 // decision: keep it to introduce later, don't throw the code away).
+// "Price Index" replaced by "Food Affordability" (operator decision,
+// 2026-10-12) -- "how many meals can I make with $X" is a stronger,
+// more actionable differentiator than a generic inflation index; the
+// old Price Index route/libs were removed, not just unlinked.
 const links = [
   { href: '/', label: 'Essential', icon: '▣' },
   { href: '/products', label: 'Products', icon: '▦' },
-  { href: '/price-index', label: 'Price Index', icon: '◈' },
+  { href: '/affordability', label: 'Food Affordability', icon: '🍽' },
 ]
 
 export default function Nav() {
