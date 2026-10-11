@@ -1,13 +1,13 @@
 import { supabase } from './supabase'
-import { mapBasktToPricer } from './basktTaxonomyMapping'
+import { mapBasktToCatalog } from './basktTaxonomyMapping'
 
-// UmuBot -- the fuller Pricer-structured product catalogue (13
-// categories, subcategories), kept deliberately as a SECONDARY section
-// behind Essential Foods (operator decision 2026-10-11: differentiate
-// the primary identity from Pricer, but keep this real, working code
-// around to grow into later -- not deleted, just not the homepage
-// anymore). See src/lib/essentialFoodsView.ts for the primary,
-// food_id-keyed browsing this site now leads with.
+// UmuBot -- the fuller real grocery catalogue (New World/PAK'nSAVE's
+// own real 13 categories, groceryCatalogTaxonomy.ts), kept deliberately
+// as a SECONDARY section behind Essential (operator decision
+// 2026-10-11: differentiate the primary identity from Pricer, but keep
+// this real, working code around to grow into later -- not deleted,
+// just not the homepage anymore). See src/lib/essentialFoodsView.ts for
+// the primary, food_id-keyed browsing this site now leads with.
 //
 // Reads price_observations.baskt_category/baskt_subcategory/brand/
 // item_name through the public anon client (src/lib/supabase.ts) --
@@ -18,11 +18,10 @@ import { mapBasktToPricer } from './basktTaxonomyMapping'
 // truncates an unpaginated pull, a real bug caught twice in the mosaro
 // codebase this was split out of.
 //
-// Every row is mapped through basktTaxonomyMapping.mapBasktToPricer
-// rather than matched by literal category/subcategory name -- Baskt's
-// own vocabulary does not match Pricer's in several places. A row whose
-// (category, subcategory) isn't in that mapping table is excluded, not
-// guessed into the nearest bucket.
+// Every row is mapped through basktTaxonomyMapping.mapBasktToCatalog --
+// its subcategory name/slug come straight from Baskt's own real text
+// now (operator request 2026-10-12: stop copying Pricer's invented
+// subcategory list), not a hand-maintained alias table.
 //
 // Known gap, flagged rather than silently built around: counts/grouping
 // here are done client-side over every matching row. Fine at current
@@ -54,7 +53,17 @@ interface CatalogRow {
   baskt_subcategory: string | null
 }
 
-export async function getSubcategoryProductCounts(): Promise<Map<string, number>> {
+export interface SubcategorySummary {
+  slug: string
+  name: string
+  productCount: number
+}
+
+/** Real subcategories actually present in the data, grouped by real
+ *  category slug -- entirely derived from Baskt's own text, never a
+ *  hardcoded list. A category with nothing synced yet just returns an
+ *  empty array, not a list of zero-count placeholders. */
+export async function getCategorySubcategorySummaries(): Promise<Map<string, SubcategorySummary[]>> {
   const rows = await fetchAllRows<CatalogRow>((from, to) =>
     supabase
       .from('price_observations')
@@ -64,22 +73,37 @@ export async function getSubcategoryProductCounts(): Promise<Map<string, number>
       .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null }>
   )
 
-  const itemsByKey = new Map<string, Set<string>>()
+  const itemsByKey = new Map<string, { categorySlug: string; name: string; items: Set<string> }>()
   for (const row of rows) {
-    const mapped = mapBasktToPricer(row.baskt_category, row.baskt_subcategory)
+    const mapped = mapBasktToCatalog(row.baskt_category, row.baskt_subcategory)
     if (!mapped) continue
     const key = subcategoryCountKey(mapped.categorySlug, mapped.subcategorySlug)
-    if (!itemsByKey.has(key)) itemsByKey.set(key, new Set())
-    itemsByKey.get(key)!.add(row.item_name)
+    if (!itemsByKey.has(key)) itemsByKey.set(key, { categorySlug: mapped.categorySlug, name: mapped.subcategoryName, items: new Set() })
+    itemsByKey.get(key)!.items.add(row.item_name)
   }
 
-  const counts = new Map<string, number>()
-  for (const [key, items] of itemsByKey) counts.set(key, items.size)
-  return counts
+  const byCategory = new Map<string, SubcategorySummary[]>()
+  for (const { categorySlug, name, items } of itemsByKey.values()) {
+    if (!byCategory.has(categorySlug)) byCategory.set(categorySlug, [])
+    byCategory.get(categorySlug)!.push({ slug: subcategorySlugFromKey(categorySlug, name), name, productCount: items.size })
+  }
+  for (const list of byCategory.values()) list.sort((a, b) => b.productCount - a.productCount)
+  return byCategory
 }
 
-/** Keyed by Pricer category/subcategory SLUGS (not Baskt's raw names --
- *  see mapBasktToPricer). */
+function subcategorySlugFromKey(categorySlug: string, subcategoryName: string): string {
+  // Mirrors groceryCatalogTaxonomy's slugify exactly -- kept local to
+  // avoid a circular import; both are pure string transforms of the
+  // same real text.
+  return subcategoryName
+    .toLowerCase()
+    .replace(/&/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** Keyed by real category/subcategory SLUGS (groceryCatalogTaxonomy.ts /
+ *  basktTaxonomyMapping.ts). */
 export function subcategoryCountKey(categorySlug: string, subcategorySlug: string): string {
   return `${categorySlug}::${subcategorySlug}`
 }
@@ -144,11 +168,11 @@ function groupIntoProducts(rows: ProductGroupRow[]): CatalogProduct[] {
   return Array.from(byItem.values()).sort((a, b) => a.itemName.localeCompare(b.itemName))
 }
 
-/** categorySlug/subcategorySlug are Pricer slugs (pricerCatalogTaxonomy.ts),
- *  not Baskt's raw category/subcategory text -- matched via
- *  basktTaxonomyMapping.mapBasktToPricer since the two vocabularies don't
- *  line up 1:1 (see this file's module doc). */
-export async function getProductsForSubcategory(categorySlug: string, subcategorySlug: string): Promise<CatalogProduct[]> {
+/** categorySlug/subcategorySlug are real catalog slugs
+ *  (groceryCatalogTaxonomy.ts), matched via
+ *  basktTaxonomyMapping.mapBasktToCatalog against Baskt's own real
+ *  category/subcategory text. */
+export async function getProductsForSubcategory(categorySlug: string, subcategorySlug: string): Promise<{ products: CatalogProduct[]; subcategoryName: string | null }> {
   const rows = await fetchAllRows<ProductGroupRow>((from, to) =>
     supabase
       .from('price_observations')
@@ -157,11 +181,16 @@ export async function getProductsForSubcategory(categorySlug: string, subcategor
       .not('baskt_subcategory', 'is', null)
       .range(from, to) as unknown as Promise<{ data: ProductGroupRow[] | null; error: { message: string } | null }>
   )
+  let subcategoryName: string | null = null
   const matching = rows.filter((row) => {
-    const mapped = mapBasktToPricer(row.baskt_category, row.baskt_subcategory)
-    return mapped?.categorySlug === categorySlug && mapped?.subcategorySlug === subcategorySlug
+    const mapped = mapBasktToCatalog(row.baskt_category, row.baskt_subcategory)
+    if (mapped?.categorySlug === categorySlug && mapped?.subcategorySlug === subcategorySlug) {
+      subcategoryName = mapped.subcategoryName
+      return true
+    }
+    return false
   })
-  return groupIntoProducts(matching)
+  return { products: groupIntoProducts(matching), subcategoryName }
 }
 
 export interface CatalogBrand {

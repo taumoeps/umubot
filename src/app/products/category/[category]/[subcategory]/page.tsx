@@ -1,13 +1,13 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { findSubcategory } from '@/lib/pricerCatalogTaxonomy'
+import { findCategory } from '@/lib/groceryCatalogTaxonomy'
 import { getProductsForSubcategory } from '@/lib/productCatalogView'
 
-// UmuBot -- the fuller Pricer-structured product catalogue, kept as a
-// secondary section for future growth (operator decision, 2026-10-11 --
-// see src/lib/productCatalogView.ts's module doc). Mirrors Pricer's
-// /categories/[id] product table (Name, Brand, Size, Lowest Price,
-// Available At).
+// UmuBot -- the fuller real grocery catalogue, kept as a secondary
+// section for future growth (operator decision, 2026-10-11 -- see
+// src/lib/productCatalogView.ts's module doc). Subcategory names come
+// from the real matched data itself now (operator request 2026-10-12),
+// not a static Pricer-copied list -- see getProductsForSubcategory.
 
 export const revalidate = 300
 
@@ -17,22 +17,22 @@ export default async function SubcategoryPage({
   params: Promise<{ category: string; subcategory: string }>
 }) {
   const { category: categorySlug, subcategory: subcategorySlug } = await params
-  const match = findSubcategory(categorySlug, subcategorySlug)
-  if (!match) notFound()
-  const { category, subcategory } = match
+  const category = findCategory(categorySlug)
+  if (!category) notFound()
 
-  const products = await getProductsForSubcategory(category.slug, subcategory.slug)
+  const { products, subcategoryName } = await getProductsForSubcategory(category.slug, subcategorySlug)
+  const displayName = subcategoryName ?? subcategorySlug
 
   return (
     <div>
       <p className="text-sm text-gray-500 mb-1">
-        <Link href="/products" className="hover:text-green-600">Products</Link>
+        <Link href="/products" className="hover:text-green-600">Grocery</Link>
         <span className="mx-2">›</span>
         {category.name}
         <span className="mx-2">›</span>
-        {subcategory.name}
+        {displayName}
       </p>
-      <h2 className="text-2xl font-bold text-gray-800 mb-6">{subcategory.name}</h2>
+      <h2 className="text-2xl font-bold text-gray-800 mb-6">{displayName}</h2>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <table className="w-full text-sm">

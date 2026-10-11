@@ -14,7 +14,7 @@ export default async function BrandsPage() {
   return (
     <div>
       <p className="text-sm text-gray-500 mb-1">
-        <Link href="/products" className="hover:text-green-600">Products</Link>
+        <Link href="/products" className="hover:text-green-600">Grocery</Link>
         <span className="mx-2">›</span>
         Brands
       </p>

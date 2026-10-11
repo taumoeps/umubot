@@ -14,7 +14,7 @@ import { usePathname } from 'next/navigation'
 // old Price Index route/libs were removed, not just unlinked.
 const links = [
   { href: '/', label: 'Essential', icon: '▣' },
-  { href: '/products', label: 'Products', icon: '▦' },
+  { href: '/products', label: 'Grocery', icon: '▦' },
   { href: '/affordability', label: 'Budget', icon: '🍽' },
 ]
 
