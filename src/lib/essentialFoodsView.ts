@@ -1,3 +1,4 @@
+import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { confidenceTierForSource, type ConfidenceTier } from './confidence'
 
@@ -135,9 +136,28 @@ interface BasketFoodRow {
  *  (source baskt/openfoodfacts) over an agent_web_search estimate
  *  whenever the item has any -- with its category resolved from the
  *  food concept itself (not the item's own, gap-prone Baskt tags).
- *  Shared by the homepage grouping below and getOtherVariants -- one
- *  query path, not two that could drift apart. */
-async function getAllFlaggedProducts(): Promise<FlaggedProduct[]> {
+ *  Shared by the homepage grouping below, getOtherVariants, and the
+ *  Budget engine's ingredient resolution -- one query path, not several
+ *  that could drift apart.
+ *
+ *  Cached across requests via unstable_cache -- real perf bug caught
+ *  live, 2026-10-12, same day as the Budget page's own version of this
+ *  fix: even after fetchAllRowsParallel, a full resolution still costs
+ *  several real seconds (confirmed live: product detail pages taking
+ *  2.9s-4.8s to open, even on REPEAT visits to the same item, because
+ *  getOtherVariants calls this same expensive function uncached on
+ *  every page view). The Budget page got its own cache wrapper around
+ *  resolveAllIngredients() that day, but this function -- the one
+ *  EVERY caller (homepage, product pages, Budget) ultimately goes
+ *  through -- stayed uncached. Caching it here instead fixes all three
+ *  call sites at the root, not just one. */
+const getAllFlaggedProducts = unstable_cache(
+  getAllFlaggedProductsUncached,
+  ['essential-flagged-products'],
+  { revalidate: 300 }
+)
+
+async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   const [flaggedResult, basketFoodsResult] = await Promise.all([
     supabase.from('essential_products').select('item_name'),
     supabase.from('essential_foods').select('id, category').eq('basket_slot', true).eq('is_active', true),

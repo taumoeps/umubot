@@ -1,4 +1,3 @@
-import { unstable_cache } from 'next/cache'
 import { getAllVariantsGroupedByFood, type EssentialProduct } from './essentialFoodsView'
 
 // UmuBot -- Food Affordability / Meal Budgets engine. Operator request,
@@ -196,41 +195,26 @@ function pickIngredientProduct(foodId: string, variants: EssentialProduct[]): In
   }
 }
 
-/** The actual expensive work, cached ACROSS requests (and across every
- *  budget/tab URL on the Food Affordability page) via unstable_cache --
- *  real perf fix, 2026-10-12. The Food Affordability page's own
- *  revalidate=300 only caches each exact URL (?tab=budgets&budget=4000
- *  vs ?budget=6000 are different pages to Next.js's router cache), but
- *  this computation doesn't depend on budget or tab at all -- every
- *  click was re-running the full real-price resolution from scratch.
- *  That, even after the N+1 and pagination fixes alongside this one,
- *  still took several real seconds (a genuine Supabase round trip for
- *  ~26,000 rows), long enough that a second click before the first
- *  finished could look like a dropped/broken button -- the "intermittent"
- *  behaviour the operator reported. Returns a plain array (not a Map --
- *  Next.js's Data Cache needs a JSON-serialisable value) that the public
- *  resolveAllIngredients below turns back into a Map. */
-const getCachedIngredientEntries = unstable_cache(
-  async (foodIds: string[]): Promise<[string, IngredientReference][]> => {
-    const variantsByFood = await getAllVariantsGroupedByFood()
-    const entries: [string, IngredientReference][] = []
-    for (const foodId of foodIds) {
-      const ref = pickIngredientProduct(foodId, variantsByFood.get(foodId) ?? [])
-      if (ref) entries.push([foodId, ref])
-    }
-    return entries
-  },
-  ['meal-affordability-ingredients'],
-  { revalidate: 300 }
-)
-
 /** Resolves an ingredient reference for every real essential food that
  *  has at least one usable flagged variant. Cheap to call from every
- *  budget tier/tab -- the real work happens at most once per 5 minutes
- *  (see getCachedIngredientEntries). */
+ *  budget tier/tab: getAllVariantsGroupedByFood's own underlying fetch
+ *  (essentialFoodsView.ts's getAllFlaggedProducts) is cached via
+ *  unstable_cache at its source now (real perf fix, 2026-10-12, moved
+ *  there from a cache wrapper that used to live in this file --
+ *  caching down at the one function every caller, including this one,
+ *  the homepage, and product detail pages' "other variants", goes
+ *  through fixes all three at once instead of just this one). The
+ *  per-ingredient selection logic below (pickIngredientProduct) is
+ *  plain in-memory work on already-fetched data, cheap enough not to
+ *  need its own cache layer on top. */
 export async function resolveAllIngredients(foodIds: string[]): Promise<Map<string, IngredientReference>> {
-  const entries = await getCachedIngredientEntries(foodIds)
-  return new Map(entries)
+  const variantsByFood = await getAllVariantsGroupedByFood()
+  const map = new Map<string, IngredientReference>()
+  for (const foodId of foodIds) {
+    const ref = pickIngredientProduct(foodId, variantsByFood.get(foodId) ?? [])
+    if (ref) map.set(foodId, ref)
+  }
+  return map
 }
 
 /** Real per-gram cost (cents) of an ingredient, from its real resolved
