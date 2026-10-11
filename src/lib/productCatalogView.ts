@@ -1,3 +1,4 @@
+import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { mapBasktToCatalog } from './basktTaxonomyMapping'
 
@@ -22,6 +23,18 @@ import { mapBasktToCatalog } from './basktTaxonomyMapping'
 // its subcategory name/slug come straight from Baskt's own real text
 // now (operator request 2026-10-12: stop copying Pricer's invented
 // subcategory list), not a hand-maintained alias table.
+//
+// Both getCategorySubcategorySummaries and getProductsForSubcategory
+// used to independently re-run the same full category-tagged pull on
+// every call -- real perf bug caught live, 2026-10-12, same day and
+// same root cause as essentialFoodsView.ts's getAllFlaggedProducts fix:
+// a Grocery category page (e.g. Frozen > Frozen Fish & Seafood) took
+// 3.9s-5.5s to open, even on repeat visits to the identical URL,
+// because nothing here was cached -- every page view re-paid the real
+// Supabase round trip. getAllCategoryTaggedRows below is the one
+// cached fetch both now share; getBrandList/getProductsForBrand get
+// their own separate cached fetch (different query, no category
+// filter).
 //
 // Known gap, flagged rather than silently built around: counts/grouping
 // here are done client-side over every matching row. Fine at current
@@ -49,9 +62,30 @@ async function fetchAllRows<T>(
 interface CatalogRow {
   item_name: string
   brand: string | null
+  pack_size: string | null
+  price_cents: number
+  chain: string | null
+  observed_at: string
   baskt_category: string | null
   baskt_subcategory: string | null
 }
+
+/** Every real price_observations row that carries a real Baskt
+ *  category/subcategory tag -- the one shared, cached fetch behind both
+ *  getCategorySubcategorySummaries and getProductsForSubcategory. */
+const getAllCategoryTaggedRows = unstable_cache(
+  async (): Promise<CatalogRow[]> =>
+    fetchAllRows<CatalogRow>((from, to) =>
+      supabase
+        .from('price_observations')
+        .select('item_name, brand, pack_size, price_cents, chain, observed_at, baskt_category, baskt_subcategory')
+        .not('baskt_category', 'is', null)
+        .not('baskt_subcategory', 'is', null)
+        .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null }>
+    ),
+  ['catalog-category-tagged-rows'],
+  { revalidate: 300 }
+)
 
 export interface SubcategorySummary {
   slug: string
@@ -64,14 +98,7 @@ export interface SubcategorySummary {
  *  hardcoded list. A category with nothing synced yet just returns an
  *  empty array, not a list of zero-count placeholders. */
 export async function getCategorySubcategorySummaries(): Promise<Map<string, SubcategorySummary[]>> {
-  const rows = await fetchAllRows<CatalogRow>((from, to) =>
-    supabase
-      .from('price_observations')
-      .select('item_name, brand, baskt_category, baskt_subcategory')
-      .not('baskt_category', 'is', null)
-      .not('baskt_subcategory', 'is', null)
-      .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null }>
-  )
+  const rows = await getAllCategoryTaggedRows()
 
   const itemsByKey = new Map<string, { categorySlug: string; name: string; items: Set<string> }>()
   for (const row of rows) {
@@ -120,23 +147,12 @@ export interface CatalogProduct {
   chains: string[]
 }
 
-interface ProductGroupRow {
-  item_name: string
-  brand: string | null
-  pack_size: string | null
-  price_cents: number
-  chain: string | null
-  observed_at: string
-  baskt_category: string | null
-  baskt_subcategory: string | null
-}
-
-function groupIntoProducts(rows: ProductGroupRow[]): CatalogProduct[] {
+function groupIntoProducts(rows: CatalogRow[]): CatalogProduct[] {
   // Reduce to the latest real observation per (item, chain) FIRST -- the
   // only rows "lowest price" is allowed to be computed from. A stale
   // price from a chain that hasn't been re-observed recently never beats
   // a chain's own current price.
-  const latestByItemChain = new Map<string, ProductGroupRow>()
+  const latestByItemChain = new Map<string, CatalogRow>()
   for (const row of rows) {
     const key = `${row.item_name}::${row.chain ?? ''}`
     const existing = latestByItemChain.get(key)
@@ -173,14 +189,7 @@ function groupIntoProducts(rows: ProductGroupRow[]): CatalogProduct[] {
  *  basktTaxonomyMapping.mapBasktToCatalog against Baskt's own real
  *  category/subcategory text. */
 export async function getProductsForSubcategory(categorySlug: string, subcategorySlug: string): Promise<{ products: CatalogProduct[]; subcategoryName: string | null }> {
-  const rows = await fetchAllRows<ProductGroupRow>((from, to) =>
-    supabase
-      .from('price_observations')
-      .select('item_name, brand, pack_size, price_cents, chain, observed_at, baskt_category, baskt_subcategory')
-      .not('baskt_category', 'is', null)
-      .not('baskt_subcategory', 'is', null)
-      .range(from, to) as unknown as Promise<{ data: ProductGroupRow[] | null; error: { message: string } | null }>
-  )
+  const rows = await getAllCategoryTaggedRows()
   let subcategoryName: string | null = null
   const matching = rows.filter((row) => {
     const mapped = mapBasktToCatalog(row.baskt_category, row.baskt_subcategory)
@@ -205,14 +214,25 @@ interface BrandGroupRow {
   chain: string | null
 }
 
+/** Every real price_observations row with a brand -- the shared,
+ *  cached fetch behind both getBrandList and getProductsForBrand, same
+ *  "one expensive query, cached, not re-run per caller" pattern as
+ *  getAllCategoryTaggedRows above. */
+const getAllBrandedRows = unstable_cache(
+  async (): Promise<BrandGroupRow[]> =>
+    fetchAllRows<BrandGroupRow>((from, to) =>
+      supabase
+        .from('price_observations')
+        .select('brand, item_name, chain')
+        .not('brand', 'is', null)
+        .range(from, to) as unknown as Promise<{ data: BrandGroupRow[] | null; error: { message: string } | null }>
+    ),
+  ['catalog-branded-rows'],
+  { revalidate: 300 }
+)
+
 export async function getBrandList(): Promise<CatalogBrand[]> {
-  const rows = await fetchAllRows<BrandGroupRow>((from, to) =>
-    supabase
-      .from('price_observations')
-      .select('brand, item_name, chain')
-      .not('brand', 'is', null)
-      .range(from, to) as unknown as Promise<{ data: BrandGroupRow[] | null; error: { message: string } | null }>
-  )
+  const rows = await getAllBrandedRows()
 
   const byBrand = new Map<string, { items: Set<string>; chains: Set<string> }>()
   for (const row of rows) {
@@ -227,13 +247,20 @@ export async function getBrandList(): Promise<CatalogBrand[]> {
     .sort((a, b) => a.brand.localeCompare(b.brand))
 }
 
+const getRowsForBrand = unstable_cache(
+  async (brand: string): Promise<CatalogRow[]> =>
+    fetchAllRows<CatalogRow>((from, to) =>
+      supabase
+        .from('price_observations')
+        .select('item_name, brand, pack_size, price_cents, chain, observed_at')
+        .eq('brand', brand)
+        .range(from, to) as unknown as Promise<{ data: CatalogRow[] | null; error: { message: string } | null }>
+    ),
+  ['catalog-rows-for-brand'],
+  { revalidate: 300 }
+)
+
 export async function getProductsForBrand(brand: string): Promise<CatalogProduct[]> {
-  const rows = await fetchAllRows<ProductGroupRow>((from, to) =>
-    supabase
-      .from('price_observations')
-      .select('item_name, brand, pack_size, price_cents, chain, observed_at')
-      .eq('brand', brand)
-      .range(from, to) as unknown as Promise<{ data: ProductGroupRow[] | null; error: { message: string } | null }>
-  )
+  const rows = await getRowsForBrand(brand)
   return groupIntoProducts(rows)
 }
