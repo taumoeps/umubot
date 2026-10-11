@@ -43,7 +43,7 @@ export default async function AffordabilityPage({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-800 mb-1">Food Affordability</h2>
+      <h2 className="text-2xl font-bold text-gray-800 mb-1">Budget</h2>
       <p className="text-sm text-gray-500 mb-1 max-w-2xl">
         See what you can eat for different budgets, using real current prices for the 22 essential foods.
       </p>
@@ -61,7 +61,7 @@ export default async function AffordabilityPage({
               tab === t ? 'border-green-600 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}
           >
-            {t === 'budgets' ? 'Meal Budgets' : t === 'index' ? 'Affordability Index' : 'How it works'}
+            {t === 'budgets' ? 'Meal Budgets' : t === 'index' ? 'Budget Index' : 'How it works'}
           </Link>
         ))}
       </div>
@@ -229,7 +229,7 @@ async function AffordabilityIndexTab({ ingredients }: { ingredients: Map<string,
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <h3 className="text-base font-bold text-gray-800 mb-1">Food Affordability Index</h3>
+      <h3 className="text-base font-bold text-gray-800 mb-1">Budget Index</h3>
       <p className="text-xs text-gray-400 mb-6 max-w-xl">
         Tracks the real cost of a standard essential-food meal over time and across locations. This is Day 1 —
         an index needs comparable history to show a trend, so today this page shows the current baseline value,

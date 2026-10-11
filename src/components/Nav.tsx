@@ -15,7 +15,7 @@ import { usePathname } from 'next/navigation'
 const links = [
   { href: '/', label: 'Essential', icon: '▣' },
   { href: '/products', label: 'Products', icon: '▦' },
-  { href: '/affordability', label: 'Food Affordability', icon: '🍽' },
+  { href: '/affordability', label: 'Budget', icon: '🍽' },
 ]
 
 export default function Nav() {
