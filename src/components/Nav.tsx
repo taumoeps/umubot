@@ -1,6 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useLocationMode } from './LocationModeContext'
 
 // Public nav -- no auth, no sign-out. "Essential" (real products
 // individually flagged essential) is the primary identity now, not a
@@ -10,18 +11,27 @@ import { usePathname } from 'next/navigation'
 // than a generic inflation index; the old Price Index route/libs were
 // removed, not just unlinked.
 //
-// Grocery hidden from nav, 2026-10-13 (operator decision, while
-// building overseas Essential support) -- the route/code stays working
-// (/products is still a real page, just not linked), same "hide, don't
-// delete, scaffolding for future growth" treatment as when it was
-// built. Not in links[] below; add it back to re-show it.
-const links = [
+// Grocery visible by default (NZ is the real default audience -- the
+// "nearest store" lookup assumes NZ until proven otherwise), hidden
+// only once a visitor's location is actually confirmed overseas
+// (operator correction, 2026-10-13, after a flat permanent hide shipped
+// first) -- Grocery's own catalogue is 100% NZ-specific (the real New
+// World/PAK'nSAVE category structure), genuinely irrelevant once
+// NearbyEssential.tsx's real location check confirms non-NZ, but
+// wrong to hide from NZ visitors who never triggered that check at
+// all. isOverseas comes from LocationModeContext, set by
+// NearbyEssential.tsx -- the route/code stays working either way
+// (/products is still a real page) -- this only ever hides the link.
+const baseLinks = [
   { href: '/', label: 'Essential', icon: '▣' },
+  { href: '/products', label: 'Grocery', icon: '▦' },
   { href: '/affordability', label: 'Budget', icon: '🍽' },
 ]
 
 export default function Nav() {
   const pathname = usePathname()
+  const { isOverseas } = useLocationMode()
+  const links = isOverseas ? baseLinks.filter((l) => l.href !== '/products') : baseLinks
   return (
     <aside className="w-56 min-h-screen bg-gray-900 text-white flex flex-col">
       <div className="px-6 py-6 border-b border-gray-700">

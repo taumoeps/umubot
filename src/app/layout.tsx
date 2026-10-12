@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Geist } from 'next/font/google'
 import './globals.css'
 import Nav from '@/components/Nav'
+import { LocationModeProvider } from '@/components/LocationModeContext'
 
 const geist = Geist({ subsets: ['latin'] })
 
@@ -18,10 +19,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${geist.className} bg-gray-50`}>
-        <div className="flex min-h-screen">
-          <Nav />
-          <main className="flex-1 p-8">{children}</main>
-        </div>
+        <LocationModeProvider>
+          <div className="flex min-h-screen">
+            <Nav />
+            <main className="flex-1 p-8">{children}</main>
+          </div>
+        </LocationModeProvider>
       </body>
     </html>
   )

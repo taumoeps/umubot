@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useLocationMode } from './LocationModeContext'
 
 // UmuBot -- client-side "Use my location" flow for Essential, ported
 // from the RecipeBot iOS app's Today view behaviour at the operator's
@@ -63,6 +64,7 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
   const [nearestStore, setNearestStore] = useState<string | null>(null)
   const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
   const [countryName, setCountryName] = useState<string | null>(null)
+  const { setIsOverseas } = useLocationMode()
 
   const categoryLabels: Record<string, string> = {}
   for (const g of flatGroups) categoryLabels[g.category] = g.label
@@ -81,9 +83,14 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
           if (data.mode === 'overseas') {
             setOverseasResults(data.results)
             setCountryName(data.countryName)
+            setIsOverseas(true)
             setStatus('ready-overseas')
             return
           }
+          // Real location confirmed NZ (either matched or genuinely no
+          // nearby coverage) -- Grocery's own catalogue is relevant
+          // again, same as before any location check ran.
+          setIsOverseas(false)
           if (data.noCoverage) {
             setStatus('no-coverage')
             return
@@ -116,7 +123,7 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
             Showing real international price data for {countryName} — {withData} of {overseasResults.length} essential foods have data available.
             Coverage varies a lot by country; a gap means no real data exists yet, not an error.
           </p>
-          <button onClick={() => setStatus('idle')} className="text-xs text-blue-700 hover:underline shrink-0">
+          <button onClick={() => { setIsOverseas(false); setStatus('idle') }} className="text-xs text-blue-700 hover:underline shrink-0">
             Show NZ prices instead
           </button>
         </div>
