@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { findNearbyLocations, resolveNearestFood, getRealBasketFoods } from '@/lib/nearbyEssential'
+import { reverseGeocodeCountry, resolveOverseasEssentials } from '@/lib/overseasEssential'
 
 // UmuBot -- real nearest-store lookup for the real 22-item essential
 // basket, triggered ONLY by an explicit user action (the "Use my
@@ -9,6 +10,17 @@ import { findNearbyLocations, resolveNearestFood, getRealBasketFoods } from '@/l
 // Bounded concurrency (not all 22 foods at once) -- same "small
 // concurrent batches, gentle on Baskt's public endpoint" discipline as
 // mosaro's basktSync.ts.
+//
+// Country-aware since 2026-10-13 (operator request, after confirming
+// RecipeBot's iOS app already has real, tested non-NZ support in its
+// own authenticated Today pipeline -- this ports the two real, non-AI
+// tiers of that same fallback chain for this public site, see
+// overseasEssential.ts's module doc for the full reasoning and real
+// limits). Reverse-geocodes the same real GPS coordinates this button
+// already collects; NZ stays on the existing Baskt-backed flow
+// unchanged, anything else switches to the overseas resolver. If
+// reverse-geocoding itself fails, falls back to the NZ flow's own
+// existing noCoverage path rather than guessing a country.
 
 export const maxDuration = 60
 
@@ -28,17 +40,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'lat and lng query params are required' }, { status: 400 })
   }
 
+  const country = await reverseGeocodeCountry(lat, lng)
+
+  if (country && country.countryCode !== 'NZ') {
+    const results = await resolveOverseasEssentials(lat, lng, country.countryName)
+    return NextResponse.json({ mode: 'overseas', countryName: country.countryName, results })
+  }
+
   const [locations, foods] = await Promise.all([
     findNearbyLocations(lat, lng, 2),
     getRealBasketFoods(),
   ])
 
   if (locations.length === 0) {
-    return NextResponse.json({ results: [], nearestStore: null, noCoverage: true })
+    return NextResponse.json({ mode: 'nz', results: [], nearestStore: null, noCoverage: true })
   }
 
   const foodsById = new Map(foods.map((f) => [f.id, f]))
   const results = await runBatched(foods, 4, (food) => resolveNearestFood(food, locations, foodsById))
 
-  return NextResponse.json({ results, nearestStore: locations[0]?.name ?? null, noCoverage: false })
+  return NextResponse.json({ mode: 'nz', results, nearestStore: locations[0]?.name ?? null, noCoverage: false })
 }

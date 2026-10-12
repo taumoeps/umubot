@@ -42,14 +42,27 @@ interface NearbyResult {
   substituteFor: string | null
 }
 
+interface OverseasResult {
+  foodId: string
+  displayName: string
+  category: string
+  tier: 'off' | 'global-estimate' | 'none'
+  itemName: string | null
+  priceUsd: number | null
+  currency: string | null
+  storeName: string | null
+}
+
 const CHAIN_LABELS: Record<string, string> = { paknsave: "PAK'nSAVE", 'new-world': 'New World' }
 
-type Status = 'idle' | 'loading' | 'ready' | 'denied' | 'error' | 'no-coverage'
+type Status = 'idle' | 'loading' | 'ready' | 'ready-overseas' | 'denied' | 'error' | 'no-coverage'
 
 export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[] }) {
   const [status, setStatus] = useState<Status>('idle')
   const [results, setResults] = useState<NearbyResult[] | null>(null)
   const [nearestStore, setNearestStore] = useState<string | null>(null)
+  const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
+  const [countryName, setCountryName] = useState<string | null>(null)
 
   const categoryLabels: Record<string, string> = {}
   for (const g of flatGroups) categoryLabels[g.category] = g.label
@@ -65,6 +78,12 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
         try {
           const res = await fetch(`/api/nearby-essential?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`)
           const data = await res.json()
+          if (data.mode === 'overseas') {
+            setOverseasResults(data.results)
+            setCountryName(data.countryName)
+            setStatus('ready-overseas')
+            return
+          }
           if (data.noCoverage) {
             setStatus('no-coverage')
             return
@@ -78,6 +97,68 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
       },
       () => setStatus('denied'),
       { timeout: 10000 }
+    )
+  }
+
+  if (status === 'ready-overseas' && overseasResults) {
+    const byCategory = new Map<string, OverseasResult[]>()
+    for (const r of overseasResults) {
+      if (!byCategory.has(r.category)) byCategory.set(r.category, [])
+      byCategory.get(r.category)!.push(r)
+    }
+    const categoryOrder = flatGroups.length > 0 ? flatGroups.map((g) => g.category) : Array.from(byCategory.keys())
+    const withData = overseasResults.filter((r) => r.tier !== 'none').length
+
+    return (
+      <div>
+        <div className="flex items-center justify-between gap-4 mb-6 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+          <p className="text-sm text-blue-800">
+            Showing real international price data for {countryName} — {withData} of {overseasResults.length} essential foods have data available.
+            Coverage varies a lot by country; a gap means no real data exists yet, not an error.
+          </p>
+          <button onClick={() => setStatus('idle')} className="text-xs text-blue-700 hover:underline shrink-0">
+            Show NZ prices instead
+          </button>
+        </div>
+        <div className="space-y-8">
+          {categoryOrder
+            .filter((c) => byCategory.has(c))
+            .map((category) => (
+              <div key={category}>
+                <h3 className="text-xl font-bold text-gray-800 mb-3">{categoryLabels[category] ?? category}</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {byCategory.get(category)!.map((r) => (
+                    <div key={r.foodId} className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+                      <p className="text-xs text-gray-400">{r.displayName}</p>
+                      {r.tier === 'off' && r.itemName && r.priceUsd !== null ? (
+                        <>
+                          <p className="font-medium text-gray-800 truncate">{r.itemName}</p>
+                          <div className="flex items-center justify-between mt-1">
+                            <p className="text-xs text-gray-500 truncate">
+                              <span className="text-green-700 font-medium">Live</span>
+                              {r.storeName && ` · ${r.storeName}`}
+                            </p>
+                            <p className="text-sm font-bold text-gray-800 shrink-0 ml-2">{r.priceUsd.toFixed(2)} {r.currency}</p>
+                          </div>
+                        </>
+                      ) : r.tier === 'global-estimate' && r.priceUsd !== null ? (
+                        <>
+                          <p className="font-medium text-gray-800 truncate">{r.itemName}</p>
+                          <div className="flex items-center justify-between mt-1">
+                            <p className="text-xs text-amber-600 font-medium">Estimated (USD)</p>
+                            <p className="text-sm font-bold text-gray-800 shrink-0 ml-2">${r.priceUsd.toFixed(2)}</p>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-sm text-gray-400 mt-1">No data for this country yet</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+        </div>
+      </div>
     )
   }
 
