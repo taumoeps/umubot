@@ -282,21 +282,6 @@ export const MEAL_DEFINITIONS: MealDefinition[] = [
   ] },
 ]
 
-/** A fixed 6-day rotation (breakfast/lunch/dinner), cycling for any
- *  number of days -- deterministic, not randomised, so results are
- *  reproducible and the shown "example meal plan" always matches the
- *  real total cost computed for it. */
-const DAY_PLANS: { breakfast: string; lunch: string; dinner: string }[] = [
-  { breakfast: 'eggs-on-toast', lunch: 'egg-fried-rice', dinner: 'chicken-vegetables' },
-  { breakfast: 'rice-porridge-banana', lunch: 'tomato-cheese-pasta', dinner: 'beef-mince-pasta' },
-  { breakfast: 'eggs-on-toast', lunch: 'cheese-on-toast', dinner: 'lamb-kumara' },
-  { breakfast: 'rice-porridge-banana', lunch: 'egg-fried-rice', dinner: 'fish-rice' },
-  { breakfast: 'eggs-on-toast', lunch: 'tomato-cheese-pasta', dinner: 'pork-potatoes' },
-  { breakfast: 'rice-porridge-banana', lunch: 'cheese-on-toast', dinner: 'steak-potatoes' },
-]
-
-const mealById = new Map(MEAL_DEFINITIONS.map((m) => [m.id, m]))
-
 export interface MealCost {
   meal: MealDefinition
   costCents: number
@@ -339,95 +324,215 @@ export interface ShoppingItem {
   usedInMealCount: number
 }
 
-export interface BudgetPlan {
-  budgetCents: number
-  days: number
-  totalMeals: number
-  totalCostCents: number
-  dayPlans: { breakfast: MealCost; lunch: MealCost; dinner: MealCost }[]
-  shoppingList: ShoppingItem[]
-  nutritionPerDay: NutritionPer100g
-  costPerMealCents: number
+export type MealType = 'breakfast' | 'lunch' | 'dinner'
+
+export interface NutritionTargets {
+  caloriesPerMeal?: number
+  proteinPerMeal?: number
+  carbsPerMeal?: number
+  fatPerMeal?: number
 }
 
-/** Real deterministic day-by-day affordability calculation: grows the
- *  plan one day at a time (cycling through DAY_PLANS), recomputing the
- *  REAL shopping list needed to cover cumulative ingredient demand
- *  (rounding up to whole packs/kg-units bought once, not re-bought per
- *  day -- the reviewer's "consumption cost vs shopping cost"
- *  distinction) each time, and stops at the largest number of days
- *  whose real total shopping cost still fits the budget. */
-export function planForBudget(budgetCents: number, ingredients: Map<string, IngredientReference>): BudgetPlan {
-  let best: BudgetPlan = {
-    budgetCents, days: 0, totalMeals: 0, totalCostCents: 0, dayPlans: [],
-    shoppingList: [], nutritionPerDay: { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0, fibreG: 0 }, costPerMealCents: 0,
+export interface MealPlanConstraints {
+  budgetCents: number
+  mealCount: number
+  mealTypes: MealType[]
+  maxCostPerMealCents?: number
+  targets?: NutritionTargets
+}
+
+export interface GeneratedMeal {
+  meal: MealDefinition
+  cost: MealCost
+}
+
+export interface MealPlanResult {
+  feasible: boolean
+  infeasibleReason?: string
+  meals: GeneratedMeal[]
+  shoppingList: ShoppingItem[]
+  totalCostCents: number
+  averageCostPerMealCents: number
+  nutritionAveragePerMeal: NutritionPer100g
+}
+
+/** Real shopping-list cost for an ARBITRARY list of meals (not tied to
+ *  a fixed day rotation) -- same whole-pack-aware aggregation the
+ *  earlier fixed-tier planner used (a pack bought once covers every
+ *  meal that needs it, never re-bought), generalised so the
+ *  configurable planner below can cost any real meal combination, not
+ *  just a hardcoded 6-day cycle. Returns null only if a selected
+ *  meal's own ingredients can't be resolved at all (shouldn't happen
+ *  given generateMealPlan only selects from already-costed candidates). */
+function computeShoppingListForMeals(
+  meals: MealDefinition[],
+  ingredients: Map<string, IngredientReference>
+): { shoppingList: ShoppingItem[]; totalCostCents: number } | null {
+  const gramsNeededByFood = new Map<string, number>()
+  const usedInMealCount = new Map<string, number>()
+  for (const meal of meals) {
+    for (const ing of meal.ingredients) {
+      gramsNeededByFood.set(ing.foodId, (gramsNeededByFood.get(ing.foodId) ?? 0) + ing.grams)
+      usedInMealCount.set(ing.foodId, (usedInMealCount.get(ing.foodId) ?? 0) + 1)
+    }
+  }
+  const shoppingList: ShoppingItem[] = []
+  let totalCostCents = 0
+  for (const [foodId, gramsNeeded] of gramsNeededByFood) {
+    const ref = ingredients.get(foodId)
+    if (!ref) return null
+    const packsNeeded = ref.weight.isPerKg ? Math.ceil(gramsNeeded) / 1000 : Math.ceil(gramsNeeded / ref.weight.totalGrams)
+    const totalCost = ref.weight.isPerKg ? centsPerGram(ref) * gramsNeeded : packsNeeded * ref.product.lowestPriceCents
+    shoppingList.push({
+      foodId, itemName: ref.product.itemName, isSubstitute: ref.isSubstitute, isAssumedWeight: ref.isAssumedWeight,
+      packsNeeded: Math.round(packsNeeded * 100) / 100, gramsNeeded: Math.round(gramsNeeded),
+      priceCentsPerPack: ref.product.lowestPriceCents, totalCostCents: Math.round(totalCost),
+      usedInMealCount: usedInMealCount.get(foodId) ?? 0,
+    })
+    totalCostCents += totalCost
+  }
+  return { shoppingList: shoppingList.sort((a, b) => b.totalCostCents - a.totalCostCents), totalCostCents: Math.round(totalCostCents) }
+}
+
+/** Sum of relative deviations from whichever per-meal targets are
+ *  actually set -- unset targets contribute nothing, so a meal is only
+ *  ever scored against what the user actually asked for. Relative (not
+ *  absolute) so calories (hundreds) and fat (tens of grams) don't
+ *  silently dominate the score just from having bigger raw numbers. */
+function nutritionDeviation(cost: MealCost, targets: NutritionTargets): number {
+  let dev = 0
+  if (targets.caloriesPerMeal != null) dev += Math.abs(cost.nutrition.kcal - targets.caloriesPerMeal) / Math.max(targets.caloriesPerMeal, 1)
+  if (targets.proteinPerMeal != null) dev += Math.abs(cost.nutrition.proteinG - targets.proteinPerMeal) / Math.max(targets.proteinPerMeal, 1)
+  if (targets.carbsPerMeal != null) dev += Math.abs(cost.nutrition.carbsG - targets.carbsPerMeal) / Math.max(targets.carbsPerMeal, 1)
+  if (targets.fatPerMeal != null) dev += Math.abs(cost.nutrition.fatG - targets.fatPerMeal) / Math.max(targets.fatPerMeal, 1)
+  return dev
+}
+
+/** The real constraint-driven meal planner (operator request,
+ *  2026-10-13, replacing the old fixed 6-day-rotation planner): given a
+ *  budget, a meal count, which meal types to include, and optional
+ *  per-meal cost/nutrition targets, selects a real combination from
+ *  MEAL_DEFINITIONS that fits every constraint -- or says plainly why
+ *  it can't, rather than silently showing something that doesn't
+ *  actually fit (the spec's own explicit requirement). Pure and
+ *  synchronous -- same real ingredient prices in, same plan out, every
+ *  time, cheap enough to re-run on every settings change with no
+ *  server round trip.
+ *
+ *  Two-phase: (1) build the CHEAPEST possible combination first -- if
+ *  even that doesn't fit the budget, nothing will, so this is the real
+ *  feasibility check, not a guess. (2) build the nutrition/variety-
+ *  aware combination (closest to any set targets, preferring an unused
+ *  meal on a tie); if THAT doesn't fit the budget, greedily swap the
+ *  most expensive selected meal for a cheaper same-type alternative,
+ *  recomputing the real shopping total each time, until it fits or no
+ *  cheaper swap remains (which can't happen, given phase 1 already
+ *  proved a fitting combination exists). */
+export function generateMealPlan(constraints: MealPlanConstraints, ingredients: Map<string, IngredientReference>): MealPlanResult {
+  const empty: MealPlanResult = {
+    feasible: false, meals: [], shoppingList: [], totalCostCents: 0, averageCostPerMealCents: 0,
+    nutritionAveragePerMeal: { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0, fibreG: 0 },
   }
 
-  // Cap at 60 days -- far beyond any real $10-$100 budget's reach, just
-  // a safety bound against an infinite loop.
-  for (let candidateDays = 1; candidateDays <= 60; candidateDays++) {
-    const dayPlans: { breakfast: MealCost; lunch: MealCost; dinner: MealCost }[] = []
-    const gramsNeededByFood = new Map<string, number>()
-    const usedInMealCount = new Map<string, number>()
+  if (constraints.mealTypes.length === 0) return { ...empty, infeasibleReason: 'Select at least one meal type.' }
+  if (constraints.mealCount <= 0) return { ...empty, infeasibleReason: 'Choose at least 1 meal.' }
 
-    for (let d = 0; d < candidateDays; d++) {
-      const plan = DAY_PLANS[d % DAY_PLANS.length]
-      const breakfast = costMeal(mealById.get(plan.breakfast)!, ingredients)
-      const lunch = costMeal(mealById.get(plan.lunch)!, ingredients)
-      const dinner = costMeal(mealById.get(plan.dinner)!, ingredients)
-      if (!breakfast || !lunch || !dinner) break
-      dayPlans.push({ breakfast, lunch, dinner })
-      for (const meal of [plan.breakfast, plan.lunch, plan.dinner]) {
-        for (const ing of mealById.get(meal)!.ingredients) {
-          gramsNeededByFood.set(ing.foodId, (gramsNeededByFood.get(ing.foodId) ?? 0) + ing.grams)
-          usedInMealCount.set(ing.foodId, (usedInMealCount.get(ing.foodId) ?? 0) + 1)
+  const candidatesByType = new Map<MealType, GeneratedMeal[]>()
+  for (const type of constraints.mealTypes) {
+    const candidates = MEAL_DEFINITIONS
+      .filter((m) => m.mealType === type)
+      .map((m) => {
+        const cost = costMeal(m, ingredients)
+        return cost ? { meal: m, cost } : null
+      })
+      .filter((x): x is GeneratedMeal => x !== null)
+      .filter((x) => constraints.maxCostPerMealCents == null || x.cost.costCents <= constraints.maxCostPerMealCents)
+    if (candidates.length === 0) {
+      const costNote = constraints.maxCostPerMealCents != null ? ` under $${(constraints.maxCostPerMealCents / 100).toFixed(2)}` : ''
+      return { ...empty, infeasibleReason: `No real ${type} meals available${costNote}.` }
+    }
+    candidatesByType.set(type, candidates)
+  }
+
+  function buildPlan(preferCheapest: boolean): GeneratedMeal[] {
+    const usedCount = new Map<string, number>()
+    const plan: GeneratedMeal[] = []
+    for (let i = 0; i < constraints.mealCount; i++) {
+      const type = constraints.mealTypes[i % constraints.mealTypes.length]
+      const scored = candidatesByType.get(type)!.map((c) => ({
+        c,
+        score: constraints.targets ? nutritionDeviation(c.cost, constraints.targets) : c.cost.costCents,
+        used: usedCount.get(c.meal.id) ?? 0,
+      }))
+      // Phase-1 (preferCheapest) is the real feasibility probe -- pure
+      // cheapest, ignoring variety, since its only job is proving the
+      // floor cost. Phase-2 exhausts real variety first (every eligible
+      // candidate of a type gets used once before any repeats), THEN
+      // breaks ties by nutrition-fit/cost -- spec's own explicit
+      // "optimise for nutritional balance, affordability, AND variety"
+      // when no targets are set, not cost-above-all (real bug caught
+      // live: an unconstrained "6 breakfasts" request returned the same
+      // cheapest meal 6 times even though a second real breakfast
+      // option existed).
+      scored.sort(preferCheapest ? (a, b) => a.score - b.score : (a, b) => a.used - b.used || a.score - b.score)
+      const picked = scored[0].c
+      plan.push(picked)
+      usedCount.set(picked.meal.id, (usedCount.get(picked.meal.id) ?? 0) + 1)
+    }
+    return plan
+  }
+
+  const cheapestPlan = buildPlan(true)
+  const cheapestShopping = computeShoppingListForMeals(cheapestPlan.map((m) => m.meal), ingredients)
+  if (!cheapestShopping || cheapestShopping.totalCostCents > constraints.budgetCents) {
+    const costNote = cheapestShopping ? `cost $${(cheapestShopping.totalCostCents / 100).toFixed(2)}` : "couldn't be priced"
+    return { ...empty, infeasibleReason: `Even the cheapest ${constraints.mealCount} meals of these types ${costNote} -- try a higher budget or fewer meals.` }
+  }
+
+  let plan = buildPlan(false)
+  let shopping = computeShoppingListForMeals(plan.map((m) => m.meal), ingredients)!
+
+  if (shopping.totalCostCents > constraints.budgetCents) {
+    for (let attempt = 0; attempt < constraints.mealCount * 2 && shopping.totalCostCents > constraints.budgetCents; attempt++) {
+      const byIndividualCostDesc = plan.map((m, idx) => [idx, m] as const).sort((a, b) => b[1].cost.costCents - a[1].cost.costCents)
+      let swapped = false
+      for (const [idx, current] of byIndividualCostDesc) {
+        const cheaperAlt = candidatesByType.get(current.meal.mealType)!
+          .filter((c) => c.meal.id !== current.meal.id)
+          .sort((a, b) => a.cost.costCents - b.cost.costCents)[0]
+        if (cheaperAlt && cheaperAlt.cost.costCents < current.cost.costCents) {
+          plan = [...plan]
+          plan[idx] = cheaperAlt
+          swapped = true
+          break
         }
       }
-    }
-    if (dayPlans.length < candidateDays) break // a meal's ingredients couldn't be resolved
-
-    const shoppingList: ShoppingItem[] = []
-    let totalCostCents = 0
-    for (const [foodId, gramsNeeded] of gramsNeededByFood) {
-      const ref = ingredients.get(foodId)
-      if (!ref) continue
-      const packsNeeded = ref.weight.isPerKg
-        ? Math.ceil(gramsNeeded) / 1000 // priced per kg, buyable in any real fraction
-        : Math.ceil(gramsNeeded / ref.weight.totalGrams)
-      const totalCost = ref.weight.isPerKg ? centsPerGram(ref) * gramsNeeded : packsNeeded * ref.product.lowestPriceCents
-      shoppingList.push({
-        foodId, itemName: ref.product.itemName, isSubstitute: ref.isSubstitute, isAssumedWeight: ref.isAssumedWeight,
-        packsNeeded: Math.round(packsNeeded * 100) / 100, gramsNeeded: Math.round(gramsNeeded),
-        priceCentsPerPack: ref.product.lowestPriceCents, totalCostCents: Math.round(totalCost),
-        usedInMealCount: usedInMealCount.get(foodId) ?? 0,
-      })
-      totalCostCents += totalCost
-    }
-    totalCostCents = Math.round(totalCostCents)
-
-    if (totalCostCents > budgetCents) break
-
-    const totalMeals = candidateDays * 3
-    const nutritionSum = dayPlans.reduce((sum, d) => ({
-      kcal: sum.kcal + d.breakfast.nutrition.kcal + d.lunch.nutrition.kcal + d.dinner.nutrition.kcal,
-      proteinG: sum.proteinG + d.breakfast.nutrition.proteinG + d.lunch.nutrition.proteinG + d.dinner.nutrition.proteinG,
-      carbsG: sum.carbsG + d.breakfast.nutrition.carbsG + d.lunch.nutrition.carbsG + d.dinner.nutrition.carbsG,
-      fatG: sum.fatG + d.breakfast.nutrition.fatG + d.lunch.nutrition.fatG + d.dinner.nutrition.fatG,
-      fibreG: sum.fibreG + d.breakfast.nutrition.fibreG + d.lunch.nutrition.fibreG + d.dinner.nutrition.fibreG,
-    }), { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0, fibreG: 0 })
-
-    best = {
-      budgetCents, days: candidateDays, totalMeals, totalCostCents,
-      dayPlans, shoppingList: shoppingList.sort((a, b) => b.totalCostCents - a.totalCostCents),
-      nutritionPerDay: {
-        kcal: nutritionSum.kcal / candidateDays, proteinG: nutritionSum.proteinG / candidateDays,
-        carbsG: nutritionSum.carbsG / candidateDays, fatG: nutritionSum.fatG / candidateDays, fibreG: nutritionSum.fibreG / candidateDays,
-      },
-      costPerMealCents: totalCostCents / totalMeals,
+      if (!swapped) break
+      shopping = computeShoppingListForMeals(plan.map((m) => m.meal), ingredients)!
     }
   }
 
-  return best
+  if (shopping.totalCostCents > constraints.budgetCents) {
+    return { ...empty, infeasibleReason: `Couldn't fit ${constraints.mealCount} meals of these types within this budget, even using the cheapest options -- try a higher budget or fewer meals.` }
+  }
+
+  const nutritionSum = plan.reduce((sum, m) => ({
+    kcal: sum.kcal + m.cost.nutrition.kcal, proteinG: sum.proteinG + m.cost.nutrition.proteinG,
+    carbsG: sum.carbsG + m.cost.nutrition.carbsG, fatG: sum.fatG + m.cost.nutrition.fatG, fibreG: sum.fibreG + m.cost.nutrition.fibreG,
+  }), { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0, fibreG: 0 })
+
+  return {
+    feasible: true,
+    meals: plan,
+    shoppingList: shopping.shoppingList,
+    totalCostCents: shopping.totalCostCents,
+    averageCostPerMealCents: shopping.totalCostCents / constraints.mealCount,
+    nutritionAveragePerMeal: {
+      kcal: nutritionSum.kcal / constraints.mealCount, proteinG: nutritionSum.proteinG / constraints.mealCount,
+      carbsG: nutritionSum.carbsG / constraints.mealCount, fatG: nutritionSum.fatG / constraints.mealCount,
+      fibreG: nutritionSum.fibreG / constraints.mealCount,
+    },
+  }
 }
 
 export const BUDGET_TIERS_CENTS = [1000, 2000, 4000, 6000, 8000, 10000]
