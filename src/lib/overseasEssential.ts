@@ -96,7 +96,20 @@ const OFF_USER_AGENT = 'UmuBot/1.0 (hello@mosaro.cloud)'
 // Deliberately tighter than mosaro's own per-food cap of 5, since that
 // was sized for one authenticated user's own request; this is a total
 // across all 13 OFF-covered foods in one visitor's request.
-const MAX_LIVE_RESOLUTIONS_PER_REQUEST = 10
+//
+// Real bug caught live, 2026-10-13: a COUNT cap alone isn't enough --
+// confirmed live, a real request for Sydney/Australia took 51.9s
+// (against this route's own 60s maxDuration, dangerously close to
+// being killed outright), because individual resolution calls were
+// slow/failing (plausibly real contention on OFF's shared 15/min
+// budget -- mosaro's own production iOS traffic hits the same real
+// endpoint from the same Vercel infrastructure). A count budget
+// protects against too MANY calls; it does nothing against calls that
+// are each slow. TIME_BUDGET_MS below is the actual fix -- a real
+// wall-clock deadline the live-resolution phase can never run past,
+// regardless of how many of the count budget's slots were used.
+const MAX_LIVE_RESOLUTIONS_PER_REQUEST = 8
+const TIME_BUDGET_MS = 20000
 
 interface RawOffPricesResponse {
   items?: Array<{
@@ -136,10 +149,10 @@ async function offFetchOnce<T>(url: string, timeoutMs: number): Promise<T | null
 }
 
 async function offFetch<T>(url: string): Promise<T | null> {
-  const first = await offFetchOnce<T>(url, 6000)
+  const first = await offFetchOnce<T>(url, 3000)
   if (first) return first
-  await new Promise((r) => setTimeout(r, 500))
-  return offFetchOnce<T>(url, 8000)
+  await new Promise((r) => setTimeout(r, 400))
+  return offFetchOnce<T>(url, 4000)
 }
 
 async function searchNearbyOff(lat: number, lon: number, radiusKm: number): Promise<OffPriceObservation[]> {
@@ -162,9 +175,17 @@ interface ResolvedOffProduct {
   categoriesTags: string[]
 }
 
+interface LiveBudget {
+  remaining: number
+  deadline: number
+}
+
 /** Reads mosaro's real off_product_cache first (shared, read-only --
- *  see module doc), only resolving live when genuinely uncached. */
-async function resolveOffProduct(barcode: string, liveBudget: { remaining: number }): Promise<ResolvedOffProduct | null> {
+ *  see module doc), only resolving live when genuinely uncached AND
+ *  still within both the count and time budget (see MAX_LIVE_
+ *  RESOLUTIONS_PER_REQUEST/TIME_BUDGET_MS's own doc for why both are
+ *  needed, not just one). */
+async function resolveOffProduct(barcode: string, liveBudget: LiveBudget): Promise<ResolvedOffProduct | null> {
   const { data: cached } = await supabase
     .from('off_product_cache')
     .select('product_name, categories_tags')
@@ -172,7 +193,7 @@ async function resolveOffProduct(barcode: string, liveBudget: { remaining: numbe
     .maybeSingle<{ product_name: string | null; categories_tags: string[] }>()
   if (cached) return { name: cached.product_name, categoriesTags: cached.categories_tags ?? [] }
 
-  if (liveBudget.remaining <= 0) return null
+  if (liveBudget.remaining <= 0 || Date.now() >= liveBudget.deadline) return null
   liveBudget.remaining -= 1
 
   const url = `${OFF_PRODUCT_URL}/${encodeURIComponent(barcode)}.json?fields=product_name,categories_tags`
@@ -195,11 +216,12 @@ export interface OffMatch {
 async function matchOffFood(
   observations: OffPriceObservation[],
   offCategoryTags: string[],
-  liveBudget: { remaining: number }
+  liveBudget: LiveBudget
 ): Promise<OffMatch | null> {
   if (offCategoryTags.length === 0 || observations.length === 0) return null
   const tagSet = new Set(offCategoryTags)
   for (const obs of observations) {
+    if (Date.now() >= liveBudget.deadline) break
     const resolved = await resolveOffProduct(obs.productCode, liveBudget)
     if (!resolved) continue
     if (resolved.categoriesTags.some((t) => tagSet.has(t))) {
@@ -327,7 +349,7 @@ export async function getRealBasketFoodsForOverseas(): Promise<EssentialFoodRow[
 export async function resolveOverseasEssentials(lat: number, lon: number, countryName: string): Promise<OverseasFoodResult[]> {
   const foods = await getRealBasketFoodsForOverseas()
   const offObservations = await searchNearbyOff(lat, lon, 50)
-  const liveBudget = { remaining: MAX_LIVE_RESOLUTIONS_PER_REQUEST }
+  const liveBudget: LiveBudget = { remaining: MAX_LIVE_RESOLUTIONS_PER_REQUEST, deadline: Date.now() + TIME_BUDGET_MS }
 
   const results: OverseasFoodResult[] = []
   for (const food of foods) {
