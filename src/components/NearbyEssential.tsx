@@ -64,7 +64,7 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
   const [nearestStore, setNearestStore] = useState<string | null>(null)
   const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
   const [countryName, setCountryName] = useState<string | null>(null)
-  const { setIsOverseas } = useLocationMode()
+  const { setIsConfirmedNZ } = useLocationMode()
 
   const categoryLabels: Record<string, string> = {}
   for (const g of flatGroups) categoryLabels[g.category] = g.label
@@ -83,14 +83,15 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
           if (data.mode === 'overseas') {
             setOverseasResults(data.results)
             setCountryName(data.countryName)
-            setIsOverseas(true)
+            setIsConfirmedNZ(false)
             setStatus('ready-overseas')
             return
           }
-          // Real location confirmed NZ (either matched or genuinely no
-          // nearby coverage) -- Grocery's own catalogue is relevant
-          // again, same as before any location check ran.
-          setIsOverseas(false)
+          // Grocery only reveals on a REAL confirmation (route's own
+          // confirmedNZ field, set only when reverse-geocoding actually
+          // returned NZ) -- a failed geocode that merely fell through to
+          // the NZ flow doesn't count as confirming anything.
+          setIsConfirmedNZ(Boolean(data.confirmedNZ))
           if (data.noCoverage) {
             setStatus('no-coverage')
             return
@@ -123,7 +124,7 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
             Showing real international price data for {countryName} — {withData} of {overseasResults.length} essential foods have data available.
             Coverage varies a lot by country; a gap means no real data exists yet, not an error.
           </p>
-          <button onClick={() => { setIsOverseas(false); setStatus('idle') }} className="text-xs text-blue-700 hover:underline shrink-0">
+          <button onClick={() => setStatus('idle')} className="text-xs text-blue-700 hover:underline shrink-0">
             Show NZ prices instead
           </button>
         </div>

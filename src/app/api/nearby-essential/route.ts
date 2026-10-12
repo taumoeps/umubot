@@ -47,17 +47,26 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ mode: 'overseas', countryName: country.countryName, results })
   }
 
+  // confirmedNZ is true ONLY when reverse-geocoding actually returned
+  // NZ -- if it failed outright (country === null), this still falls
+  // through to the same NZ-flow behaviour (a real location failure
+  // shouldn't block using the site), but the client needs to know that
+  // wasn't a real confirmation, not just "not overseas" (operator
+  // request, 2026-10-13: Grocery should only reveal on an actual
+  // confirmed-NZ result, not merely "we couldn't tell").
+  const confirmedNZ = country?.countryCode === 'NZ'
+
   const [locations, foods] = await Promise.all([
     findNearbyLocations(lat, lng, 2),
     getRealBasketFoods(),
   ])
 
   if (locations.length === 0) {
-    return NextResponse.json({ mode: 'nz', results: [], nearestStore: null, noCoverage: true })
+    return NextResponse.json({ mode: 'nz', confirmedNZ, results: [], nearestStore: null, noCoverage: true })
   }
 
   const foodsById = new Map(foods.map((f) => [f.id, f]))
   const results = await runBatched(foods, 4, (food) => resolveNearestFood(food, locations, foodsById))
 
-  return NextResponse.json({ mode: 'nz', results, nearestStore: locations[0]?.name ?? null, noCoverage: false })
+  return NextResponse.json({ mode: 'nz', confirmedNZ, results, nearestStore: locations[0]?.name ?? null, noCoverage: false })
 }

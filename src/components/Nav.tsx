@@ -11,17 +11,16 @@ import { useLocationMode } from './LocationModeContext'
 // than a generic inflation index; the old Price Index route/libs were
 // removed, not just unlinked.
 //
-// Grocery visible by default (NZ is the real default audience -- the
-// "nearest store" lookup assumes NZ until proven otherwise), hidden
-// only once a visitor's location is actually confirmed overseas
-// (operator correction, 2026-10-13, after a flat permanent hide shipped
-// first) -- Grocery's own catalogue is 100% NZ-specific (the real New
-// World/PAK'nSAVE category structure), genuinely irrelevant once
-// NearbyEssential.tsx's real location check confirms non-NZ, but
-// wrong to hide from NZ visitors who never triggered that check at
-// all. isOverseas comes from LocationModeContext, set by
-// NearbyEssential.tsx -- the route/code stays working either way
-// (/products is still a real page) -- this only ever hides the link.
+// Grocery hidden by default, shown ONLY once a visitor's location is
+// actually confirmed NZ (operator decision, 2026-10-13, correcting an
+// earlier version that defaulted to visible) -- Grocery's own
+// catalogue is 100% NZ-specific (the real New World/PAK'nSAVE category
+// structure), so it stays hidden until there's a real reason to think
+// a visitor is in NZ, not just an absence of evidence they aren't.
+// isConfirmedNZ comes from LocationModeContext, set by
+// NearbyEssential.tsx from the real API response's confirmedNZ field --
+// the route/code stays working either way (/products is still a real
+// page) -- this only ever hides the link.
 const baseLinks = [
   { href: '/', label: 'Essential', icon: '▣' },
   { href: '/products', label: 'Grocery', icon: '▦' },
@@ -30,8 +29,8 @@ const baseLinks = [
 
 export default function Nav() {
   const pathname = usePathname()
-  const { isOverseas } = useLocationMode()
-  const links = isOverseas ? baseLinks.filter((l) => l.href !== '/products') : baseLinks
+  const { isConfirmedNZ } = useLocationMode()
+  const links = isConfirmedNZ ? baseLinks : baseLinks.filter((l) => l.href !== '/products')
   return (
     <aside className="w-56 min-h-screen bg-gray-900 text-white flex flex-col">
       <div className="px-6 py-6 border-b border-gray-700">
