@@ -1,4 +1,4 @@
-import { getAllVariantsGroupedByFood, type EssentialProduct } from './essentialFoodsView'
+import { getAllVariantsGroupedByFood, looksPlain, type EssentialProduct } from './essentialFoodsView'
 
 // UmuBot -- Food Affordability / Meal Budgets engine. Operator request,
 // 2026-10-12, replacing Price Index in the nav: "how many meals can I
@@ -15,6 +15,13 @@ import { getAllVariantsGroupedByFood, type EssentialProduct } from './essentialF
 // Essential's homepage shows as cheapest, and explicitly marks it as a
 // substitute when no plain option is available among the real flagged
 // candidates.
+//
+// looksPlain/PROCESSED_KEYWORDS now live in essentialFoodsView.ts, not
+// here -- operator request, 2026-10-12: Essential's own homepage had
+// the exact same "Beef Steak Sausages representing Beef steak" bug
+// this module already solved, because its own representative pick had
+// no plain-ness preference at all. Sharing one copy means Essential and
+// Budget can never pick different representatives for the same food.
 //
 // Deterministic by design (the reviewer's own stated requirement):
 // every number here is computed from real current essential_products
@@ -77,18 +84,6 @@ const ASSUMED_UNIT_GRAMS: Record<string, number> = {
   eggs: 55, // one large egg
   bananas: 130, // one banana
   chicken: 150, // one piece/skewer
-}
-
-const PROCESSED_KEYWORDS = [
-  'kebab', 'schnitzel', 'crumbed', 'battered', 'fries', 'sausage', 'nugget',
-  'marinated', 'honey', 'soy', 'bbq', 'satay', 'stuffed', 'burger', 'patties',
-  'pudding', 'twist', 'scroll', 'gluten free', 'half loaf', 'snack pack',
-  'cups', 'coconut', 'lemongrass', 'baguette', 'breadcrumbs', 'sprout',
-]
-
-function looksPlain(itemName: string): boolean {
-  const lower = itemName.toLowerCase()
-  return !PROCESSED_KEYWORDS.some((kw) => lower.includes(kw))
 }
 
 interface ResolvedWeight {

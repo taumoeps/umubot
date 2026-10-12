@@ -50,9 +50,44 @@ import { runPaginated } from './paginatedQuery'
 // meant to stand alone) was showing as its own Essential card because
 // nothing filtered representative food_ids down to the real 22.
 //
+// Plain-ingredient preference -- a fourth real bug, caught live by the
+// operator 2026-10-12: "Beef Steak Sausages (420g)" was the real
+// representative shown for "Beef steak", because it genuinely was the
+// cheapest live-tier flagged item under that food_id, and nothing here
+// distinguished a processed product from a plain cut. The same real
+// bug mealAffordability.ts's Budget engine had already solved for its
+// own ingredient picks (PROCESSED_KEYWORDS/looksPlain below, operator
+// request that day: avoid Kumara Fries, flavoured kebabs etc as
+// "the" representative of a plain staple) -- that logic now lives HERE
+// instead, as the one shared source both this homepage and the Budget
+// engine use, so they never pick different representatives for the
+// same food. Tier (live vs estimated) still outranks plain-ness --
+// never show a fake estimate over a real price just because it's
+// plain -- and plain-ness outranks price -- never show a cheaper
+// processed product over a pricier plain one.
+//
 // Paginated with .range() -- PostgREST's default 1000-row cap silently
 // truncated an earlier query here down to 8 distinct items out of a
 // real 296, caught live 2026-10-11 while building this exact backfill.
+
+/** Keywords that mark a real flagged product as a processed/derivative
+ *  form rather than the plain staple itself (a sausage, a crumbed
+ *  fillet, a flavoured kebab) -- used to prefer a plain product as a
+ *  food's representative, both here and in mealAffordability.ts's
+ *  Budget engine. Not a general classifier: a genuinely new processed-
+ *  product naming pattern not on this list would still slip through,
+ *  the same honest limit the Budget engine already carried. */
+export const PROCESSED_KEYWORDS = [
+  'kebab', 'schnitzel', 'crumbed', 'battered', 'fries', 'sausage', 'nugget',
+  'marinated', 'honey', 'soy', 'bbq', 'satay', 'stuffed', 'burger', 'patties',
+  'pudding', 'twist', 'scroll', 'gluten free', 'half loaf', 'snack pack',
+  'cups', 'coconut', 'lemongrass', 'baguette', 'breadcrumbs', 'sprout',
+]
+
+export function looksPlain(itemName: string): boolean {
+  const lower = itemName.toLowerCase()
+  return !PROCESSED_KEYWORDS.some((kw) => lower.includes(kw))
+}
 
 // Pagination itself is shared via paginatedQuery.ts's runPaginated --
 // see that file's module doc. This function still wraps its OWN
@@ -216,6 +251,21 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   return Array.from(byItemName.values())
 }
 
+/** True when `candidate` should replace `current` as a food's
+ *  representative -- tier first, then plain-ness, then price (see
+ *  getEssentialProductsByCategory's own doc for why this order). */
+function isBetterRepresentative(candidate: EssentialProduct, current: EssentialProduct): boolean {
+  if (current.tier === 'live' && candidate.tier === 'estimated') return false
+  if (current.tier === 'estimated' && candidate.tier === 'live') return true
+
+  const candidatePlain = looksPlain(candidate.itemName)
+  const currentPlain = looksPlain(current.itemName)
+  if (currentPlain && !candidatePlain) return false
+  if (!currentPlain && candidatePlain) return true
+
+  return candidate.lowestPriceCents < current.lowestPriceCents
+}
+
 export async function getEssentialProductsByCategory(): Promise<{ category: string; label: string; products: EssentialProduct[] }[]> {
   const [allProducts, categoriesResult] = await Promise.all([
     getAllFlaggedProducts(),
@@ -224,24 +274,21 @@ export async function getEssentialProductsByCategory(): Promise<{ category: stri
   if (categoriesResult.error) throw new Error(categoriesResult.error.message)
 
   // Collapse to one representative per essential-food concept
-  // (food_id): the real cheapest LIVE item when the food has any, else
-  // its cheapest estimate -- a live item always wins over an estimate
-  // regardless of nominal price (see module doc). Only categories with
-  // at least one flagged product show -- an empty category here would
-  // be exactly the clutter the operator flagged live, 2026-10-11.
+  // (food_id), in strict priority order: (1) tier -- a live item always
+  // wins over an estimate regardless of nominal price; (2) plain-ness
+  // -- within the same tier, a plain product (PROCESSED_KEYWORDS/
+  // looksPlain above) always wins over a processed one regardless of
+  // price, the real fix for "Beef Steak Sausages" representing "Beef
+  // steak"; (3) price -- within the same tier and plain-ness, cheapest
+  // wins. Only categories with at least one flagged product show -- an
+  // empty category here would be exactly the clutter the operator
+  // flagged live, 2026-10-11.
   const byCategory = new Map<string, Map<string, EssentialProduct>>()
   for (const p of allProducts) {
     if (!byCategory.has(p.categorySlug)) byCategory.set(p.categorySlug, new Map())
     const repByFoodId = byCategory.get(p.categorySlug)!
     const existing = repByFoodId.get(p.foodId)
-    if (!existing) {
-      repByFoodId.set(p.foodId, p)
-      continue
-    }
-    const pIsBetterTier = existing.tier === 'estimated' && p.tier === 'live'
-    const existingIsBetterTier = existing.tier === 'live' && p.tier === 'estimated'
-    if (existingIsBetterTier) continue
-    if (pIsBetterTier || p.lowestPriceCents < existing.lowestPriceCents) repByFoodId.set(p.foodId, p)
+    if (!existing || isBetterRepresentative(p, existing)) repByFoodId.set(p.foodId, p)
   }
 
   return ((categoriesResult.data ?? []) as CategoryRow[])
