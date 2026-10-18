@@ -25,6 +25,15 @@ interface FlatGroup {
   label: string
   products: FlatProduct[]
 }
+// Today v2 -- Pantry/Nutrition grouping for the default browse view (essential-foods-
+// redesign.md). Separate from FlatGroup/flatGroups above on purpose: flatGroups (real supermarket
+// category) is still needed by the "Use my location" and overseas branches below for their own
+// category-label lookup, since nearbyEssential.ts/overseasEssential.ts still group by category.
+interface GroupedGroup {
+  group: 'pantry' | 'nutrition'
+  label: string
+  products: FlatProduct[]
+}
 
 interface NearbyMatch {
   itemName: string
@@ -58,7 +67,7 @@ const CHAIN_LABELS: Record<string, string> = { paknsave: "PAK'nSAVE", 'new-world
 
 type Status = 'idle' | 'loading' | 'ready' | 'ready-overseas' | 'denied' | 'error' | 'no-coverage'
 
-export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[] }) {
+export default function NearbyEssential({ groupedGroups, flatGroups }: { groupedGroups: GroupedGroup[]; flatGroups: FlatGroup[] }) {
   const [status, setStatus] = useState<Status>('idle')
   const [results, setResults] = useState<NearbyResult[] | null>(null)
   const [nearestStore, setNearestStore] = useState<string | null>(null)
@@ -243,18 +252,23 @@ export default function NearbyEssential({ flatGroups }: { flatGroups: FlatGroup[
         {status === 'no-coverage' && <p className="text-sm text-gray-400">No real covered store found near you — showing all real variants instead.</p>}
       </div>
 
-      {flatGroups.length === 0 ? (
+      {groupedGroups.length === 0 ? (
         <p className="text-sm text-gray-400 bg-white rounded-xl border border-dashed border-gray-200 px-4 py-10 text-center">
           No products flagged essential yet.
         </p>
       ) : (
         <div className="space-y-8">
-          {flatGroups.map((group) => (
-            <div key={group.category}>
-              <div className="flex items-baseline gap-2 mb-3">
+          {groupedGroups.map((group) => (
+            <div key={group.group}>
+              <div className="flex items-baseline gap-2 mb-1">
                 <h3 className="text-xl font-bold text-gray-800">{group.label}</h3>
                 <span className="text-sm text-gray-400">{group.products.length} product{group.products.length === 1 ? '' : 's'}</span>
               </div>
+              <p className="text-xs text-gray-400 mb-3">
+                {group.group === 'pantry'
+                  ? 'Non-perishable food foundation — buy in bulk, store, replenish when needed.'
+                  : 'Perishable foods and fresh ingredients — buy as needed, use before spoilage.'}
+              </p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {group.products.map((p) => (
                   <Link

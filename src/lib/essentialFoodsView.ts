@@ -112,6 +112,7 @@ export interface EssentialProduct {
 
 interface FlaggedProduct extends EssentialProduct {
   categorySlug: string
+  essentialGroup: 'pantry' | 'nutrition' | null
 }
 
 interface FlaggedRow {
@@ -137,6 +138,7 @@ interface CategoryRow {
 interface BasketFoodRow {
   id: string
   category: string
+  essential_group: string | null
 }
 
 /** Every real, individually-flagged essential product belonging to one
@@ -169,14 +171,25 @@ const getAllFlaggedProducts = unstable_cache(
 async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   const [flaggedResult, basketFoodsResult] = await Promise.all([
     supabase.from('essential_products').select('item_name'),
-    supabase.from('essential_foods').select('id, category').eq('basket_slot', true).eq('is_active', true),
+    supabase.from('essential_foods').select('id, category, essential_group').eq('basket_slot', true).eq('is_active', true),
   ])
   if (flaggedResult.error) throw new Error(flaggedResult.error.message)
   if (basketFoodsResult.error) throw new Error(basketFoodsResult.error.message)
 
   const flaggedNames = new Set(((flaggedResult.data ?? []) as FlaggedRow[]).map((r) => r.item_name))
   if (flaggedNames.size === 0) return []
-  const categoryByFoodId = new Map(((basketFoodsResult.data ?? []) as BasketFoodRow[]).map((f) => [f.id, f.category]))
+  const basketFoodRows = (basketFoodsResult.data ?? []) as BasketFoodRow[]
+  const categoryByFoodId = new Map(basketFoodRows.map((f) => [f.id, f.category]))
+  // essential_group: 'pantry' | 'nutrition' | NULL. NULL is a real state (not yet classified),
+  // not something to guess at -- see essential-foods-implementation.md Sec5.1. A food in this
+  // state is excluded from the Pantry/Nutrition view below rather than dumped into a confusing
+  // third bucket or silently assumed either way.
+  const groupByFoodId = new Map<string, 'pantry' | 'nutrition' | null>(
+    basketFoodRows.map((f): [string, 'pantry' | 'nutrition' | null] => [
+      f.id,
+      f.essential_group === 'pantry' || f.essential_group === 'nutrition' ? f.essential_group : null,
+    ])
+  )
   if (categoryByFoodId.size === 0) return []
 
   // Scoped to the real flagged item names at the SQL level (though
@@ -226,6 +239,7 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   const byItemName = new Map<string, FlaggedProduct>()
   for (const { row, tier } of latestByItemChain.values()) {
     const categorySlug = categoryByFoodId.get(row.food_id)!
+    const essentialGroup = groupByFoodId.get(row.food_id) ?? null
     const existing = byItemName.get(row.item_name)
     if (!existing) {
       byItemName.set(row.item_name, {
@@ -235,6 +249,7 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
         packSize: row.pack_size,
         lowestPriceCents: row.price_cents,
         lowestPriceAsOf: row.observed_at,
+        essentialGroup,
         chains: row.chain ? [row.chain] : [],
         categorySlug,
         tier,
@@ -297,6 +312,44 @@ export async function getEssentialProductsByCategory(): Promise<{ category: stri
       category: c.id,
       label: c.label,
       products: Array.from(byCategory.get(c.id)!.values()).sort((a, b) => a.itemName.localeCompare(b.itemName)),
+    }))
+}
+
+/** Same real representative-selection logic as getEssentialProductsByCategory above (tier, then
+ *  plain-ness, then price), grouped by essential_group ('pantry' | 'nutrition') instead of
+ *  supermarket category -- the Today v2 Pantry/Nutrition split from essential-foods-redesign.md,
+ *  added 2026-10-18 once the real essential_group column existed and the 25 live basket-slot
+ *  rows were backfilled (see essential-foods-phase2-backfill.md).
+ *
+ *  Pantry always returned first, Nutrition second -- the established convention across every
+ *  essential-foods design doc this session produced, not an arbitrary choice here.
+ *
+ *  A food whose essential_group is still NULL (not yet classified -- see the FlaggedProduct
+ *  mapping above) is excluded from this view entirely, not guessed into either bucket and not
+ *  shown in a confusing third "unclassified" section. This is the minimum safeguard
+ *  essential-foods-implementation.md Sec10's revised Phase 2 scope requires shipping alongside
+ *  the UI, not after it: better to under-show than to show a food under the wrong one of two
+ *  user-facing, meaningfully different sections. Currently a no-op (all 25 real basket-slot rows
+ *  are classified), but protects correctness the moment an unclassified candidate food is added. */
+export async function getEssentialProductsByGroup(): Promise<{ group: 'pantry' | 'nutrition'; label: string; products: EssentialProduct[] }[]> {
+  const allProducts = await getAllFlaggedProducts()
+
+  const byGroup = new Map<'pantry' | 'nutrition', Map<string, EssentialProduct>>()
+  for (const p of allProducts) {
+    if (p.essentialGroup === null) continue // unclassified -- see doc comment above
+    if (!byGroup.has(p.essentialGroup)) byGroup.set(p.essentialGroup, new Map())
+    const repByFoodId = byGroup.get(p.essentialGroup)!
+    const existing = repByFoodId.get(p.foodId)
+    if (!existing || isBetterRepresentative(p, existing)) repByFoodId.set(p.foodId, p)
+  }
+
+  const labels: Record<'pantry' | 'nutrition', string> = { pantry: 'Pantry Essentials', nutrition: 'Nutrition Essentials' }
+  return (['pantry', 'nutrition'] as const)
+    .filter((g) => byGroup.has(g))
+    .map((g) => ({
+      group: g,
+      label: labels[g],
+      products: Array.from(byGroup.get(g)!.values()).sort((a, b) => a.itemName.localeCompare(b.itemName)),
     }))
 }
 
