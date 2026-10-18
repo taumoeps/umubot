@@ -184,8 +184,11 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   // not something to guess at -- see essential-foods-implementation.md Sec5.1. A food in this
   // state is excluded from the Pantry/Nutrition view below rather than dumped into a confusing
   // third bucket or silently assumed either way.
-  const groupByFoodId = new Map(
-    basketFoodRows.map((f) => [f.id, f.essential_group === 'pantry' || f.essential_group === 'nutrition' ? f.essential_group : null])
+  const groupByFoodId = new Map<string, 'pantry' | 'nutrition' | null>(
+    basketFoodRows.map((f): [string, 'pantry' | 'nutrition' | null] => [
+      f.id,
+      f.essential_group === 'pantry' || f.essential_group === 'nutrition' ? f.essential_group : null,
+    ])
   )
   if (categoryByFoodId.size === 0) return []
 
