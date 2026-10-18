@@ -18,22 +18,37 @@ interface FlatProduct {
   itemName: string
   brand: string | null
   lowestPriceCents: number
+  lowestPriceAsOf: string
   tier: 'live' | 'estimated'
+  unitPriceCentsPerKg: number | null
+  unitPriceIsAssumed: boolean
 }
-interface FlatGroup {
-  category: string
-  label: string
-  products: FlatProduct[]
+
+/** Phase 2 task 5 (essential-foods-implementation.md Sec13 acceptance criterion #6 -- "clearly
+ *  distinguishes observed, stale, and missing prices"): confidence.ts's Live/Estimated tiers
+ *  already distinguish observed vs. estimated; this adds the missing third dimension --
+ *  showing how OLD a Live price actually is, using the real lowestPriceAsOf timestamp that was
+ *  already computed server-side but never surfaced. Deliberately shown only for Live-tier
+ *  products -- an Estimated price's "as of" timestamp doesn't carry the same "freshness" meaning
+ *  a real observed price does. */
+function daysAgoLabel(isoDate: string): string {
+  const days = Math.floor((Date.now() - new Date(isoDate).getTime()) / 86400000)
+  if (days <= 0) return 'today'
+  if (days === 1) return '1 day ago'
+  return `${days} days ago`
 }
-// Today v2 -- Pantry/Nutrition grouping for the default browse view (essential-foods-
-// redesign.md). Separate from FlatGroup/flatGroups above on purpose: flatGroups (real supermarket
-// category) is still needed by the "Use my location" and overseas branches below for their own
-// category-label lookup, since nearbyEssential.ts/overseasEssential.ts still group by category.
+// Today v2 -- Pantry/Nutrition grouping (essential-foods-redesign.md), now shared by all three
+// view modes below (default browse, "Use my location", overseas). Supersedes the old
+// supermarket-category grouping this component used throughout -- see essentialFoodsView.ts,
+// nearbyEssential.ts, and overseasEssential.ts, which all now resolve the same essential_group
+// field from essential_foods.
 interface GroupedGroup {
   group: 'pantry' | 'nutrition'
   label: string
   products: FlatProduct[]
 }
+
+type EssentialGroup = 'pantry' | 'nutrition' | null
 
 interface NearbyMatch {
   itemName: string
@@ -47,7 +62,7 @@ interface NearbyMatch {
 interface NearbyResult {
   foodId: string
   displayName: string
-  category: string
+  essentialGroup: EssentialGroup
   match: NearbyMatch | null
   substituteFor: string | null
 }
@@ -55,7 +70,7 @@ interface NearbyResult {
 interface OverseasResult {
   foodId: string
   displayName: string
-  category: string
+  essentialGroup: EssentialGroup
   tier: 'off' | 'global-estimate' | 'none'
   itemName: string | null
   priceUsd: number | null
@@ -64,19 +79,33 @@ interface OverseasResult {
 }
 
 const CHAIN_LABELS: Record<string, string> = { paknsave: "PAK'nSAVE", 'new-world': 'New World' }
+const GROUP_LABELS: Record<'pantry' | 'nutrition', string> = { pantry: 'Pantry Essentials', nutrition: 'Nutrition Essentials' }
+const GROUP_SUBTITLES: Record<'pantry' | 'nutrition', string> = {
+  pantry: 'Non-perishable food foundation — buy in bulk, store, replenish when needed.',
+  nutrition: 'Perishable foods and fresh ingredients — buy as needed, use before spoilage.',
+}
+/** Safeguard, same principle as essentialFoodsView.ts's own: a food with no essential_group yet
+ *  (not yet classified) is excluded from every grouped view rather than guessed into either
+ *  bucket or dumped into a confusing third section. */
+function groupOrder<T extends { essentialGroup: EssentialGroup }>(items: T[]): { group: 'pantry' | 'nutrition'; items: T[] }[] {
+  const byGroup = new Map<'pantry' | 'nutrition', T[]>()
+  for (const item of items) {
+    if (item.essentialGroup === null) continue
+    if (!byGroup.has(item.essentialGroup)) byGroup.set(item.essentialGroup, [])
+    byGroup.get(item.essentialGroup)!.push(item)
+  }
+  return (['pantry', 'nutrition'] as const).filter((g) => byGroup.has(g)).map((g) => ({ group: g, items: byGroup.get(g)! }))
+}
 
 type Status = 'idle' | 'loading' | 'ready' | 'ready-overseas' | 'denied' | 'error' | 'no-coverage'
 
-export default function NearbyEssential({ groupedGroups, flatGroups }: { groupedGroups: GroupedGroup[]; flatGroups: FlatGroup[] }) {
+export default function NearbyEssential({ groupedGroups }: { groupedGroups: GroupedGroup[] }) {
   const [status, setStatus] = useState<Status>('idle')
   const [results, setResults] = useState<NearbyResult[] | null>(null)
   const [nearestStore, setNearestStore] = useState<string | null>(null)
   const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
   const [countryName, setCountryName] = useState<string | null>(null)
   const { setIsConfirmedNZ } = useLocationMode()
-
-  const categoryLabels: Record<string, string> = {}
-  for (const g of flatGroups) categoryLabels[g.category] = g.label
 
   function useMyLocation() {
     if (!navigator.geolocation) {
@@ -118,12 +147,7 @@ export default function NearbyEssential({ groupedGroups, flatGroups }: { grouped
   }
 
   if (status === 'ready-overseas' && overseasResults) {
-    const byCategory = new Map<string, OverseasResult[]>()
-    for (const r of overseasResults) {
-      if (!byCategory.has(r.category)) byCategory.set(r.category, [])
-      byCategory.get(r.category)!.push(r)
-    }
-    const categoryOrder = flatGroups.length > 0 ? flatGroups.map((g) => g.category) : Array.from(byCategory.keys())
+    const grouped = groupOrder(overseasResults)
     const withData = overseasResults.filter((r) => r.tier !== 'none').length
 
     return (
@@ -138,13 +162,12 @@ export default function NearbyEssential({ groupedGroups, flatGroups }: { grouped
           </button>
         </div>
         <div className="space-y-8">
-          {categoryOrder
-            .filter((c) => byCategory.has(c))
-            .map((category) => (
-              <div key={category}>
-                <h3 className="text-xl font-bold text-gray-800 mb-3">{categoryLabels[category] ?? category}</h3>
+          {grouped.map(({ group, items }) => (
+              <div key={group}>
+                <h3 className="text-xl font-bold text-gray-800 mb-1">{GROUP_LABELS[group]}</h3>
+                <p className="text-xs text-gray-400 mb-3">{GROUP_SUBTITLES[group]}</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {byCategory.get(category)!.map((r) => (
+                  {items.map((r) => (
                     <div key={r.foodId} className="bg-white rounded-xl border border-gray-200 px-4 py-3">
                       <p className="text-xs text-gray-400">{r.displayName}</p>
                       {r.tier === 'off' && r.itemName && r.priceUsd !== null ? (
@@ -180,12 +203,7 @@ export default function NearbyEssential({ groupedGroups, flatGroups }: { grouped
   }
 
   if (status === 'ready' && results) {
-    const byCategory = new Map<string, NearbyResult[]>()
-    for (const r of results) {
-      if (!byCategory.has(r.category)) byCategory.set(r.category, [])
-      byCategory.get(r.category)!.push(r)
-    }
-    const categoryOrder = flatGroups.length > 0 ? flatGroups.map((g) => g.category) : Array.from(byCategory.keys())
+    const grouped = groupOrder(results)
 
     return (
       <div>
@@ -198,13 +216,12 @@ export default function NearbyEssential({ groupedGroups, flatGroups }: { grouped
           </button>
         </div>
         <div className="space-y-8">
-          {categoryOrder
-            .filter((c) => byCategory.has(c))
-            .map((category) => (
-              <div key={category}>
-                <h3 className="text-xl font-bold text-gray-800 mb-3">{categoryLabels[category] ?? category}</h3>
+          {grouped.map(({ group, items }) => (
+              <div key={group}>
+                <h3 className="text-xl font-bold text-gray-800 mb-1">{GROUP_LABELS[group]}</h3>
+                <p className="text-xs text-gray-400 mb-3">{GROUP_SUBTITLES[group]}</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {byCategory.get(category)!.map((r) => (
+                  {items.map((r) => (
                     <div key={r.foodId} className="bg-white rounded-xl border border-gray-200 px-4 py-3">
                       <p className="text-xs text-gray-400">{r.displayName}</p>
                       {r.match ? (
@@ -264,11 +281,7 @@ export default function NearbyEssential({ groupedGroups, flatGroups }: { grouped
                 <h3 className="text-xl font-bold text-gray-800">{group.label}</h3>
                 <span className="text-sm text-gray-400">{group.products.length} product{group.products.length === 1 ? '' : 's'}</span>
               </div>
-              <p className="text-xs text-gray-400 mb-3">
-                {group.group === 'pantry'
-                  ? 'Non-perishable food foundation — buy in bulk, store, replenish when needed.'
-                  : 'Perishable foods and fresh ingredients — buy as needed, use before spoilage.'}
-              </p>
+              <p className="text-xs text-gray-400 mb-3">{GROUP_SUBTITLES[group.group]}</p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {group.products.map((p) => (
                   <Link
@@ -280,10 +293,21 @@ export default function NearbyEssential({ groupedGroups, flatGroups }: { grouped
                       <p className="font-medium text-gray-800 truncate">{p.itemName}</p>
                       <p className="text-xs text-gray-400 truncate">
                         {p.brand ?? 'No brand recorded'}
-                        {p.tier === 'estimated' && <span className="ml-1.5 text-amber-600 font-medium">Estimated</span>}
+                        {p.tier === 'estimated' ? (
+                          <span className="ml-1.5 text-amber-600 font-medium">Estimated</span>
+                        ) : (
+                          <span className="ml-1.5 text-green-700">· Live, {daysAgoLabel(p.lowestPriceAsOf)}</span>
+                        )}
                       </p>
                     </div>
-                    <p className="text-sm font-bold text-gray-800 shrink-0 ml-3">${(p.lowestPriceCents / 100).toFixed(2)}</p>
+                    <div className="text-right shrink-0 ml-3">
+                      <p className="text-sm font-bold text-gray-800">${(p.lowestPriceCents / 100).toFixed(2)}</p>
+                      {p.unitPriceCentsPerKg !== null && (
+                        <p className="text-xs text-gray-400">
+                          {p.unitPriceIsAssumed ? '~' : ''}${(p.unitPriceCentsPerKg / 100).toFixed(2)}/kg
+                        </p>
+                      )}
+                    </div>
                   </Link>
                 ))}
               </div>

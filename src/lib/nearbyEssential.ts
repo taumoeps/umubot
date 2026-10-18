@@ -184,6 +184,7 @@ export interface EssentialFoodRow {
   id: string
   display_name: string
   category: string
+  essential_group: string | null
   search_terms: unknown
   fallback_food_ids: unknown
 }
@@ -192,11 +193,19 @@ export interface ResolvedFood {
   foodId: string
   displayName: string
   category: string
+  /** Today v2 (essential-foods-redesign.md): 'pantry' | 'nutrition' | null (not yet
+   *  classified). Mirrors essentialFoodsView.ts's same field for the default browse view --
+   *  see NearbyEssential.tsx for how the client groups by it. */
+  essentialGroup: 'pantry' | 'nutrition' | null
   match: NearbyMatch | null
   /** The ORIGINAL food's display name when a fallback filled the slot,
    *  same real substituteFor semantics as mosaro's Today route --
    *  null means a direct match, not a substitute. */
   substituteFor: string | null
+}
+
+function toEssentialGroup(value: string | null): 'pantry' | 'nutrition' | null {
+  return value === 'pantry' || value === 'nutrition' ? value : null
 }
 
 /**
@@ -212,10 +221,11 @@ export async function resolveNearestFood(
   locations: (BasktLocation & { distanceKm: number })[],
   allFoodsById: Map<string, EssentialFoodRow>
 ): Promise<ResolvedFood> {
+  const essentialGroup = toEssentialGroup(food.essential_group)
   const primaryTerms = Array.isArray(food.search_terms) ? (food.search_terms as string[]) : []
   for (const location of locations) {
     const match = await searchTermsAtLocation(primaryTerms, location)
-    if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, match, substituteFor: null }
+    if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match, substituteFor: null }
   }
 
   const fallbackIds = Array.isArray(food.fallback_food_ids) ? (food.fallback_food_ids as string[]) : []
@@ -225,17 +235,17 @@ export async function resolveNearestFood(
     const fallbackTerms = Array.isArray(fallbackFood.search_terms) ? (fallbackFood.search_terms as string[]) : []
     for (const location of locations) {
       const match = await searchTermsAtLocation(fallbackTerms, location)
-      if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, match, substituteFor: food.display_name }
+      if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match, substituteFor: food.display_name }
     }
   }
 
-  return { foodId: food.id, displayName: food.display_name, category: food.category, match: null, substituteFor: null }
+  return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match: null, substituteFor: null }
 }
 
 export async function getRealBasketFoods(): Promise<EssentialFoodRow[]> {
   const { data, error } = await supabase
     .from('essential_foods')
-    .select('id, display_name, category, search_terms, fallback_food_ids')
+    .select('id, display_name, category, essential_group, search_terms, fallback_food_ids')
     .eq('basket_slot', true)
     .eq('is_active', true)
     .order('display_name', { ascending: true })
