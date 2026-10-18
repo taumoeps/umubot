@@ -1,4 +1,4 @@
-import { getEssentialProductsByCategory } from '@/lib/essentialFoodsView'
+import { getEssentialProductsByCategory, getEssentialProductsByGroup } from '@/lib/essentialFoodsView'
 import NearbyEssential from '@/components/NearbyEssential'
 
 // UmuBot -- homepage. Essential shows ONLY real products individually
@@ -21,7 +21,13 @@ import NearbyEssential from '@/components/NearbyEssential'
 export const revalidate = 300
 
 export default async function HomePage() {
-  const groups = await getEssentialProductsByCategory()
+  // Today v2 (essential-foods-redesign.md): the default browse view groups by essential_group
+  // (Pantry/Nutrition), not supermarket category. `categoryGroups` is still fetched and passed
+  // through as `flatGroups` -- NearbyEssential's "Use my location" and overseas modes still group
+  // their own results by real supermarket category (nearbyEssential.ts/overseasEssential.ts
+  // weren't touched in this change) and need it for their category-label lookup. Not a leftover;
+  // both are real, in use, for different parts of the same component.
+  const [groups, categoryGroups] = await Promise.all([getEssentialProductsByGroup(), getEssentialProductsByCategory()])
   const totalProducts = groups.reduce((sum, g) => sum + g.products.length, 0)
 
   return (
@@ -37,7 +43,7 @@ export default async function HomePage() {
         without saying which.
       </p>
 
-      <NearbyEssential flatGroups={groups} />
+      <NearbyEssential groupedGroups={groups} flatGroups={categoryGroups} />
     </div>
   )
 }
