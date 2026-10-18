@@ -2,6 +2,7 @@ import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
 import { confidenceTierForSource, type ConfidenceTier } from './confidence'
 import { runPaginated } from './paginatedQuery'
+import { resolveWeight } from './packWeight'
 
 // UmuBot -- Essential is driven by essential_products
 // (real, individually-flagged products), not essential_foods concepts
@@ -89,6 +90,27 @@ export function looksPlain(itemName: string): boolean {
   return !PROCESSED_KEYWORDS.some((kw) => lower.includes(kw))
 }
 
+/** Matching-layer form-validation safeguard (essential-foods-implementation.md Sec5.1 /
+ *  Sec13 acceptance criterion #2: "fresh milk cannot be classified or priced as unopened UHT
+ *  milk"). A food concept's essential_group ('pantry' = shelf-stable expected, 'nutrition' =
+ *  perishable/fresh expected) is a property of the FOOD CONCEPT, not a guarantee about any one
+ *  flagged PRODUCT under it -- a generic "milk" concept classified nutrition/fresh could still
+ *  have a UHT product mistakenly flagged under it. Same "detect from the real product name,
+ *  don't trust the parent classification blindly" principle as PROCESSED_KEYWORDS/looksPlain
+ *  above -- narrow and evidence-based (the canonical example this whole redesign used
+ *  throughout), not a general classifier; a real mismatch pattern not on this list would still
+ *  slip through, same honest limit PROCESSED_KEYWORDS already carries. */
+const NUTRITION_GROUP_CONTRADICTION_KEYWORDS = ['uht', 'long life', 'longlife', 'powdered', 'shelf stable', 'shelf-stable']
+const PANTRY_GROUP_CONTRADICTION_KEYWORDS = ['fresh', 'chilled', 'refrigerate']
+
+export function hasFormMismatch(itemName: string, essentialGroup: 'pantry' | 'nutrition' | null): boolean {
+  if (!essentialGroup) return false
+  const lower = itemName.toLowerCase()
+  if (essentialGroup === 'nutrition') return NUTRITION_GROUP_CONTRADICTION_KEYWORDS.some((kw) => lower.includes(kw))
+  if (essentialGroup === 'pantry') return PANTRY_GROUP_CONTRADICTION_KEYWORDS.some((kw) => lower.includes(kw))
+  return false
+}
+
 // Pagination itself is shared via paginatedQuery.ts's runPaginated --
 // see that file's module doc. This function still wraps its OWN
 // unstable_cache around the whole thing (not paginatedQuery.ts's
@@ -108,6 +130,17 @@ export interface EssentialProduct {
   lowestPriceAsOf: string
   chains: string[]
   tier: ConfidenceTier
+  /** Comparable unit price -- essential-foods-implementation.md Sec6.1's own worked example
+   *  (white rice): "the UI should show both total purchase cost and comparable unit price, not
+   *  automatically choose the smallest or cheapest pack." Cents per kilogram, computed from the
+   *  real pack_size via packWeight.ts's resolveWeight(); null when the pack size can't be
+   *  resolved to a real or reasonably-assumed weight (e.g. a genuinely unparseable pack_size) --
+   *  never a guessed unit price. */
+  unitPriceCentsPerKg: number | null
+  /** True when unitPriceCentsPerKg rests on packWeight.ts's ASSUMED_UNIT_GRAMS (a labelled
+   *  assumed per-unit weight for count-sold items like one egg or one bread roll) rather than a
+   *  real parsed pack_size -- shown to the user as a caveat, not hidden. */
+  unitPriceIsAssumed: boolean
 }
 
 interface FlaggedProduct extends EssentialProduct {
@@ -209,7 +242,12 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
       .range(from, to)
     return query as unknown as Promise<{ data: ObservationRow[] | null; error: { message: string } | null; count?: number | null }>
   })
-  const relevant = rows.filter((r) => categoryByFoodId.has(r.food_id))
+  // hasFormMismatch: the matching-layer safeguard itself -- a flagged product whose real name
+  // contradicts its food concept's declared essential_group never becomes a candidate
+  // representative at all, same stage as the existing categoryByFoodId filter.
+  const relevant = rows.filter(
+    (r) => categoryByFoodId.has(r.food_id) && !hasFormMismatch(r.item_name, groupByFoodId.get(r.food_id) ?? null)
+  )
 
   // Per item: use ONLY its live-tier rows when it has any, else fall
   // back to its estimated rows -- never mix the two for one item.
@@ -242,6 +280,7 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
     const essentialGroup = groupByFoodId.get(row.food_id) ?? null
     const existing = byItemName.get(row.item_name)
     if (!existing) {
+      const weight = resolveWeight(row.pack_size, row.food_id)
       byItemName.set(row.item_name, {
         itemName: row.item_name,
         foodId: row.food_id,
@@ -253,11 +292,17 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
         chains: row.chain ? [row.chain] : [],
         categorySlug,
         tier,
+        unitPriceCentsPerKg: weight ? (row.price_cents / weight.totalGrams) * 1000 : null,
+        unitPriceIsAssumed: weight?.isAssumedWeight ?? false,
       })
     } else {
       if (row.price_cents < existing.lowestPriceCents) {
         existing.lowestPriceCents = row.price_cents
         existing.lowestPriceAsOf = row.observed_at
+        // Recompute, don't just carry the old unit price forward -- same item_name across
+        // chains shares the same real pack_size/weight, so this is deterministic, not a guess.
+        const weight = resolveWeight(row.pack_size, row.food_id)
+        existing.unitPriceCentsPerKg = weight ? (row.price_cents / weight.totalGrams) * 1000 : null
       }
       if (row.chain && !existing.chains.includes(row.chain)) existing.chains.push(row.chain)
     }

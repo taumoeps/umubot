@@ -316,6 +316,7 @@ export interface EssentialFoodRow {
   id: string
   display_name: string
   category: string
+  essential_group: string | null
   off_category_tags: string[] | null
 }
 
@@ -323,6 +324,9 @@ export interface OverseasFoodResult {
   foodId: string
   displayName: string
   category: string
+  /** Today v2 (essential-foods-redesign.md) -- same field/semantics as nearbyEssential.ts's
+   *  ResolvedFood and essentialFoodsView.ts's default view. */
+  essentialGroup: 'pantry' | 'nutrition' | null
   tier: 'off' | 'global-estimate' | 'none'
   itemName: string | null
   priceUsd: number | null
@@ -330,10 +334,14 @@ export interface OverseasFoodResult {
   storeName: string | null
 }
 
+function toEssentialGroup(value: string | null): 'pantry' | 'nutrition' | null {
+  return value === 'pantry' || value === 'nutrition' ? value : null
+}
+
 export async function getRealBasketFoodsForOverseas(): Promise<EssentialFoodRow[]> {
   const { data, error } = await supabase
     .from('essential_foods')
-    .select('id, display_name, category, off_category_tags')
+    .select('id, display_name, category, essential_group, off_category_tags')
     .eq('basket_slot', true)
     .eq('is_active', true)
     .order('display_name', { ascending: true })
@@ -353,10 +361,11 @@ export async function resolveOverseasEssentials(lat: number, lon: number, countr
 
   const results: OverseasFoodResult[] = []
   for (const food of foods) {
+    const essentialGroup = toEssentialGroup(food.essential_group)
     if (food.off_category_tags && food.off_category_tags.length > 0) {
       const match = await matchOffFood(offObservations, food.off_category_tags, liveBudget)
       results.push({
-        foodId: food.id, displayName: food.display_name, category: food.category,
+        foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup,
         tier: match ? 'off' : 'none',
         itemName: match?.itemName ?? null, priceUsd: match?.priceAmount ?? null,
         currency: match?.currency ?? null, storeName: match?.storeName ?? null,
@@ -366,7 +375,7 @@ export async function resolveOverseasEssentials(lat: number, lon: number, countr
 
     const estimate = await getGlobalPriceEstimate(food.id, countryName, 1)
     results.push({
-      foodId: food.id, displayName: food.display_name, category: food.category,
+      foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup,
       tier: estimate ? 'global-estimate' : 'none',
       itemName: estimate ? food.display_name : null, priceUsd: estimate?.priceUsd ?? null,
       currency: estimate ? 'USD' : null, storeName: null,
