@@ -1,8 +1,32 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocationMode } from './LocationModeContext'
+
+const DIETARY_STORAGE_KEY = 'umubot-dietary-restrictions'
+
+/** Mirrors dietaryFlags.ts's DIETARY_RESTRICTIONS/isRestrictionCompliant exactly, duplicated
+ *  here (not imported) for the same reason RELATIONSHIP_LABELS is duplicated above: that module
+ *  pulls in next/cache's unstable_cache for its server-side fetch, which breaks a client
+ *  component's build if imported directly. */
+interface DietaryRestriction {
+  id: string
+  label: string
+  excludesFlags: string[]
+}
+const DIETARY_RESTRICTIONS: DietaryRestriction[] = [
+  { id: 'vegetarian', label: 'Vegetarian', excludesFlags: ['contains-meat', 'contains-fish'] },
+  { id: 'vegan', label: 'Vegan', excludesFlags: ['contains-meat', 'contains-fish', 'contains-dairy', 'contains-egg'] },
+  { id: 'dairy-free', label: 'Dairy-free', excludesFlags: ['contains-dairy'] },
+  { id: 'gluten-free', label: 'Gluten-free', excludesFlags: ['contains-gluten'] },
+  { id: 'egg-free', label: 'Egg-free', excludesFlags: ['contains-egg'] },
+  { id: 'no-pork', label: 'No pork', excludesFlags: ['contains-pork'] },
+]
+function isRestrictionCompliant(foodFlags: string[], selectedRestrictionIds: string[]): boolean {
+  const excluded = new Set(selectedRestrictionIds.flatMap((id) => DIETARY_RESTRICTIONS.find((r) => r.id === id)?.excludesFlags ?? []))
+  return !foodFlags.some((f) => excluded.has(f))
+}
 
 // UmuBot -- client-side "Use my location" flow for Essential, ported
 // from the RecipeBot iOS app's Today view behaviour at the operator's
@@ -22,6 +46,7 @@ interface FlatProduct {
   tier: 'live' | 'estimated'
   unitPriceCentsPerKg: number | null
   unitPriceIsAssumed: boolean
+  dietaryFlags: string[]
 }
 
 /** Phase 2 task 5 (essential-foods-implementation.md Sec13 acceptance criterion #6 -- "clearly
@@ -59,12 +84,26 @@ interface NearbyMatch {
   storeName: string
   distanceKm: number
 }
+
+type RelationshipType = 'equivalent' | 'form_alternative' | 'culinary' | 'nutritional'
+
+/** Phase 3 -- mirrors nearbyEssential.ts's RELATIONSHIP_LABELS exactly. Kept as a plain literal
+ *  here rather than imported since this is a client component and that module does a real
+ *  Supabase call at import time (server-only). */
+const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
+  equivalent: 'same product, different pack',
+  form_alternative: 'different storage form',
+  culinary: 'culinary substitute',
+  nutritional: 'nutritional alternative',
+}
+
 interface NearbyResult {
   foodId: string
   displayName: string
   essentialGroup: EssentialGroup
   match: NearbyMatch | null
   substituteFor: string | null
+  substituteRelationshipType: RelationshipType | null
 }
 
 interface OverseasResult {
@@ -106,6 +145,28 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
   const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
   const [countryName, setCountryName] = useState<string | null>(null)
   const { setIsConfirmedNZ } = useLocationMode()
+
+  // Phase 3: anonymous, browser-local dietary-restriction filter -- scoped to the default browse
+  // view only (the one with real dietaryFlags data attached server-side); "Use my location" and
+  // overseas results don't carry per-product dietary data, a stated boundary not a silent gap.
+  const [selectedRestrictions, setSelectedRestrictions] = useState<string[]>([])
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DIETARY_STORAGE_KEY)
+      if (raw) setSelectedRestrictions(JSON.parse(raw))
+    } catch {
+      // Private browsing / blocked storage -- just start with no restrictions selected.
+    }
+  }, [])
+  function toggleRestriction(id: string) {
+    const next = selectedRestrictions.includes(id) ? selectedRestrictions.filter((r) => r !== id) : [...selectedRestrictions, id]
+    setSelectedRestrictions(next)
+    try {
+      localStorage.setItem(DIETARY_STORAGE_KEY, JSON.stringify(next))
+    } catch {
+      // Not persisted this session -- the filter still works, just won't be remembered.
+    }
+  }
 
   function useMyLocation() {
     if (!navigator.geolocation) {
@@ -232,7 +293,11 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
                           <div className="flex items-center justify-between mt-1">
                             <p className="text-xs text-gray-500">
                               {CHAIN_LABELS[r.match.chain] ?? r.match.chain} · {r.match.distanceKm.toFixed(1)}km
-                              {r.substituteFor && <span className="ml-1 text-amber-600">(alternative)</span>}
+                              {r.substituteFor && (
+                                <span className="ml-1 text-amber-600">
+                                  ({r.substituteRelationshipType ? RELATIONSHIP_LABELS[r.substituteRelationshipType] : 'alternative'})
+                                </span>
+                              )}
                             </p>
                             <p className="text-sm font-bold text-gray-800">${(r.match.priceCents / 100).toFixed(2)}</p>
                           </div>
@@ -275,15 +340,42 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
         </p>
       ) : (
         <div className="space-y-8">
-          {groupedGroups.map((group) => (
+          <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+            <p className="text-xs text-gray-500 mb-2">
+              Filter by dietary restriction — based on each food&apos;s own ingredients, not a certification. A food
+              with no flags shown just means none of these apply, not that it&apos;s been checked and cleared.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {DIETARY_RESTRICTIONS.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => toggleRestriction(r.id)}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                    selectedRestrictions.includes(r.id)
+                      ? 'bg-green-600 text-white border-green-600'
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-green-400'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {groupedGroups.map((group) => {
+            const filteredProducts =
+              selectedRestrictions.length === 0
+                ? group.products
+                : group.products.filter((p) => isRestrictionCompliant(p.dietaryFlags, selectedRestrictions))
+            if (filteredProducts.length === 0) return null
+            return (
             <div key={group.group}>
               <div className="flex items-baseline gap-2 mb-1">
                 <h3 className="text-xl font-bold text-gray-800">{group.label}</h3>
-                <span className="text-sm text-gray-400">{group.products.length} product{group.products.length === 1 ? '' : 's'}</span>
+                <span className="text-sm text-gray-400">{filteredProducts.length} product{filteredProducts.length === 1 ? '' : 's'}</span>
               </div>
               <p className="text-xs text-gray-400 mb-3">{GROUP_SUBTITLES[group.group]}</p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {group.products.map((p) => (
+                {filteredProducts.map((p) => (
                   <Link
                     key={p.itemName}
                     href={`/product/${encodeURIComponent(p.itemName)}`}
@@ -312,7 +404,8 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
                 ))}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

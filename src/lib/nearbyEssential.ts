@@ -189,6 +189,23 @@ export interface EssentialFoodRow {
   fallback_food_ids: unknown
 }
 
+/** Phase 3 (essential-foods-implementation.md Sec7/Sec7.1): the four typed substitution
+ *  relationships, replacing the flat, untyped fallback_food_ids with real classified data from
+ *  the new food_relationships table. 'equivalent' = genuinely the same product in a different
+ *  pack/prep format (e.g. cheese vs grated cheese); everything else found in the real backfilled
+ *  data turned out to be 'culinary' (a different cut/species/product commonly substituted, not
+ *  literally the same thing) -- see essential-foods-phase3-migration.sql's backfill for the real
+ *  per-relationship reasoning. 'form_alternative' and 'nutritional' exist in the type but aren't
+ *  used by any of the 27 real backfilled relationships yet. */
+export type RelationshipType = 'equivalent' | 'form_alternative' | 'culinary' | 'nutritional'
+
+export const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
+  equivalent: 'same product, different pack',
+  form_alternative: 'different storage form',
+  culinary: 'culinary substitute',
+  nutritional: 'nutritional alternative',
+}
+
 export interface ResolvedFood {
   foodId: string
   displayName: string
@@ -202,10 +219,25 @@ export interface ResolvedFood {
    *  same real substituteFor semantics as mosaro's Today route --
    *  null means a direct match, not a substitute. */
   substituteFor: string | null
+  /** Phase 3: the real relationship type for this substitution, looked up from
+   *  food_relationships. Null when substituteFor is null (no substitution happened) OR when a
+   *  substitution happened but no typed relationship row exists yet for that pair (shouldn't
+   *  occur for the current 22-food basket -- every real fallback_food_ids pair was backfilled --
+   *  but a food added later without a matching food_relationships row falls back to this,
+   *  honestly, rather than guessing a type). */
+  substituteRelationshipType: RelationshipType | null
 }
 
 function toEssentialGroup(value: string | null): 'pantry' | 'nutrition' | null {
   return value === 'pantry' || value === 'nutrition' ? value : null
+}
+
+/** Keyed "sourceId|targetId" -> relationship type, fetched once per request alongside the
+ *  basket foods themselves (small table, cheap to load whole). */
+export async function getRelationshipTypes(): Promise<Map<string, RelationshipType>> {
+  const { data, error } = await supabase.from('food_relationships').select('source_food_id, target_food_id, relationship_type')
+  if (error) throw new Error(error.message)
+  return new Map((data ?? []).map((r): [string, RelationshipType] => [`${r.source_food_id}|${r.target_food_id}`, r.relationship_type as RelationshipType]))
 }
 
 /**
@@ -219,13 +251,14 @@ function toEssentialGroup(value: string | null): 'pantry' | 'nutrition' | null {
 export async function resolveNearestFood(
   food: EssentialFoodRow,
   locations: (BasktLocation & { distanceKm: number })[],
-  allFoodsById: Map<string, EssentialFoodRow>
+  allFoodsById: Map<string, EssentialFoodRow>,
+  relationshipTypes: Map<string, RelationshipType>
 ): Promise<ResolvedFood> {
   const essentialGroup = toEssentialGroup(food.essential_group)
   const primaryTerms = Array.isArray(food.search_terms) ? (food.search_terms as string[]) : []
   for (const location of locations) {
     const match = await searchTermsAtLocation(primaryTerms, location)
-    if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match, substituteFor: null }
+    if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match, substituteFor: null, substituteRelationshipType: null }
   }
 
   const fallbackIds = Array.isArray(food.fallback_food_ids) ? (food.fallback_food_ids as string[]) : []
@@ -235,11 +268,14 @@ export async function resolveNearestFood(
     const fallbackTerms = Array.isArray(fallbackFood.search_terms) ? (fallbackFood.search_terms as string[]) : []
     for (const location of locations) {
       const match = await searchTermsAtLocation(fallbackTerms, location)
-      if (match) return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match, substituteFor: food.display_name }
+      if (match) {
+        const relationshipType = relationshipTypes.get(`${food.id}|${fallbackId}`) ?? null
+        return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match, substituteFor: food.display_name, substituteRelationshipType: relationshipType }
+      }
     }
   }
 
-  return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match: null, substituteFor: null }
+  return { foodId: food.id, displayName: food.display_name, category: food.category, essentialGroup, match: null, substituteFor: null, substituteRelationshipType: null }
 }
 
 export async function getRealBasketFoods(): Promise<EssentialFoodRow[]> {
