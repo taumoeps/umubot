@@ -3,6 +3,7 @@ import { supabase } from './supabase'
 import { confidenceTierForSource, type ConfidenceTier } from './confidence'
 import { runPaginated } from './paginatedQuery'
 import { resolveWeight } from './packWeight'
+import { getDietaryFlagsByFoodId } from './dietaryFlags'
 
 // UmuBot -- Essential is driven by essential_products
 // (real, individually-flagged products), not essential_foods concepts
@@ -141,6 +142,11 @@ export interface EssentialProduct {
    *  assumed per-unit weight for count-sold items like one egg or one bread roll) rather than a
    *  real parsed pack_size -- shown to the user as a caveat, not hidden. */
   unitPriceIsAssumed: boolean
+  /** Phase 3: real food_dietary_flags ids (e.g. "contains-dairy") for this product's food
+   *  concept, from dietaryFlags.ts -- empty array for a food with no recorded flags (e.g. a
+   *  plain fruit), not a sign anything is missing. See dietaryFlags.ts's own module doc for why
+   *  these are positive/definitional properties, not asserted "is vegan" judgments. */
+  dietaryFlags: string[]
 }
 
 interface FlaggedProduct extends EssentialProduct {
@@ -202,9 +208,10 @@ const getAllFlaggedProducts = unstable_cache(
 )
 
 async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
-  const [flaggedResult, basketFoodsResult] = await Promise.all([
+  const [flaggedResult, basketFoodsResult, dietaryFlagsByFoodId] = await Promise.all([
     supabase.from('essential_products').select('item_name'),
     supabase.from('essential_foods').select('id, category, essential_group').eq('basket_slot', true).eq('is_active', true),
+    getDietaryFlagsByFoodId(),
   ])
   if (flaggedResult.error) throw new Error(flaggedResult.error.message)
   if (basketFoodsResult.error) throw new Error(basketFoodsResult.error.message)
@@ -294,6 +301,7 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
         tier,
         unitPriceCentsPerKg: weight ? (row.price_cents / weight.totalGrams) * 1000 : null,
         unitPriceIsAssumed: weight?.isAssumedWeight ?? false,
+        dietaryFlags: dietaryFlagsByFoodId[row.food_id] ?? [],
       })
     } else {
       if (row.price_cents < existing.lowestPriceCents) {

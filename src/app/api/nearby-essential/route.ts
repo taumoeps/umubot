@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { findNearbyLocations, resolveNearestFood, getRealBasketFoods } from '@/lib/nearbyEssential'
+import { findNearbyLocations, resolveNearestFood, getRealBasketFoods, getRelationshipTypes } from '@/lib/nearbyEssential'
 import { reverseGeocodeCountry, resolveOverseasEssentials } from '@/lib/overseasEssential'
 
 // UmuBot -- real nearest-store lookup for the real 22-item essential
@@ -56,9 +56,10 @@ export async function GET(req: NextRequest) {
   // confirmed-NZ result, not merely "we couldn't tell").
   const confirmedNZ = country?.countryCode === 'NZ'
 
-  const [locations, foods] = await Promise.all([
+  const [locations, foods, relationshipTypes] = await Promise.all([
     findNearbyLocations(lat, lng, 2),
     getRealBasketFoods(),
+    getRelationshipTypes(),
   ])
 
   if (locations.length === 0) {
@@ -66,7 +67,7 @@ export async function GET(req: NextRequest) {
   }
 
   const foodsById = new Map(foods.map((f) => [f.id, f]))
-  const results = await runBatched(foods, 4, (food) => resolveNearestFood(food, locations, foodsById))
+  const results = await runBatched(foods, 4, (food) => resolveNearestFood(food, locations, foodsById, relationshipTypes))
 
   return NextResponse.json({ mode: 'nz', confirmedNZ, results, nearestStore: locations[0]?.name ?? null, noCoverage: false })
 }
