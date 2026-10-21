@@ -1,14 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { useLocationMode } from './LocationModeContext'
-import type { ConfidenceTier } from '@/lib/confidence'
+import { formatUnitPrice, storeLabel, type EssentialItem, type EssentialsGroup, type Offer } from '@/lib/essentialsClient'
 
 const DIETARY_STORAGE_KEY = 'umubot-dietary-restrictions'
 
 /** Mirrors dietaryFlags.ts's DIETARY_RESTRICTIONS/isRestrictionCompliant exactly, duplicated
- *  here (not imported) for the same reason RELATIONSHIP_LABELS is duplicated above: that module
+ *  here (not imported): that module
  *  pulls in next/cache's unstable_cache for its server-side fetch, which breaks a client
  *  component's build if imported directly. */
 interface DietaryRestriction {
@@ -24,6 +24,26 @@ const DIETARY_RESTRICTIONS: DietaryRestriction[] = [
   { id: 'egg-free', label: 'Egg-free', excludesFlags: ['contains-egg'] },
   { id: 'no-pork', label: 'No pork', excludesFlags: ['contains-pork'] },
 ]
+function subscribeToStorage(onChange: () => void): () => void {
+  window.addEventListener('storage', onChange)
+  return () => window.removeEventListener('storage', onChange)
+}
+function readStoredRestrictions(): string | null {
+  try {
+    return localStorage.getItem(DIETARY_STORAGE_KEY)
+  } catch {
+    return null // private browsing / blocked storage: start with no restrictions selected
+  }
+}
+function parseRestrictions(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
 function isRestrictionCompliant(foodFlags: string[], selectedRestrictionIds: string[]): boolean {
   const excluded = new Set(selectedRestrictionIds.flatMap((id) => DIETARY_RESTRICTIONS.find((r) => r.id === id)?.excludesFlags ?? []))
   return !foodFlags.some((f) => excluded.has(f))
@@ -39,17 +59,6 @@ function isRestrictionCompliant(foodFlags: string[], selectedRestrictionIds: str
 // anything that looks like an automated bulk scan (src/lib/
 // nearbyEssential.ts's module doc).
 
-interface FlatProduct {
-  itemName: string
-  brand: string | null
-  lowestPriceCents: number
-  lowestPriceAsOf: string
-  tier: ConfidenceTier
-  unitPriceCentsPerKg: number | null
-  unitPriceIsAssumed: boolean
-  dietaryFlags: string[]
-}
-
 /** Phase 2 task 5 (essential-foods-implementation.md Sec13 acceptance criterion #6 -- "clearly
  *  distinguishes observed, stale, and missing prices"): confidence.ts's Live/Estimated tiers
  *  already distinguish observed vs. estimated; this adds the missing third dimension --
@@ -63,49 +72,7 @@ function daysAgoLabel(isoDate: string): string {
   if (days === 1) return '1 day ago'
   return `${days} days ago`
 }
-// Today v2 -- Pantry/Nutrition grouping (essential-foods-redesign.md), now shared by all three
-// view modes below (default browse, "Use my location", overseas). Supersedes the old
-// supermarket-category grouping this component used throughout -- see essentialFoodsView.ts,
-// nearbyEssential.ts, and overseasEssential.ts, which all now resolve the same essential_group
-// field from essential_foods.
-interface GroupedGroup {
-  group: 'pantry' | 'nutrition'
-  label: string
-  products: FlatProduct[]
-}
-
 type EssentialGroup = 'pantry' | 'nutrition' | null
-
-interface NearbyMatch {
-  itemName: string
-  brand: string | null
-  packSize: string | null
-  priceCents: number
-  chain: string
-  storeName: string
-  distanceKm: number
-}
-
-type RelationshipType = 'equivalent' | 'form_alternative' | 'culinary' | 'nutritional'
-
-/** Phase 3 -- mirrors nearbyEssential.ts's RELATIONSHIP_LABELS exactly. Kept as a plain literal
- *  here rather than imported since this is a client component and that module does a real
- *  Supabase call at import time (server-only). */
-const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
-  equivalent: 'same product, different pack',
-  form_alternative: 'different storage form',
-  culinary: 'culinary substitute',
-  nutritional: 'nutritional alternative',
-}
-
-interface NearbyResult {
-  foodId: string
-  displayName: string
-  essentialGroup: EssentialGroup
-  match: NearbyMatch | null
-  substituteFor: string | null
-  substituteRelationshipType: RelationshipType | null
-}
 
 interface OverseasResult {
   foodId: string
@@ -118,7 +85,6 @@ interface OverseasResult {
   storeName: string | null
 }
 
-const CHAIN_LABELS: Record<string, string> = { paknsave: "PAK'nSAVE", 'new-world': 'New World' }
 const GROUP_LABELS: Record<'pantry' | 'nutrition', string> = { pantry: 'Pantry Essentials', nutrition: 'Nutrition Essentials' }
 const GROUP_SUBTITLES: Record<'pantry' | 'nutrition', string> = {
   pantry: 'Non-perishable food foundation — buy in bulk, store, replenish when needed.',
@@ -137,12 +103,79 @@ function groupOrder<T extends { essentialGroup: EssentialGroup }>(items: T[]): {
   return (['pantry', 'nutrition'] as const).filter((g) => byGroup.has(g)).map((g) => ({ group: g, items: byGroup.get(g)! }))
 }
 
+const TIER_STYLES: Record<Offer['tier'], { label: string; className: string }> = {
+  live: { label: 'Live', className: 'text-green-700' },
+  recent: { label: 'Recent', className: 'text-sky-700' },
+  estimated: { label: 'Estimated', className: 'text-amber-600 font-medium' },
+}
+
+/** One essential food as mosaro's essentials service chose it -- the same product
+ *  RecipeBot's Today shows. `nearby` adds distance and the cheaper-store line. */
+function EssentialCard({ item, nearby }: { item: EssentialItem; nearby: boolean }) {
+  const offer = item.representative
+  if (!offer) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+        <p className="text-xs text-gray-400">{item.displayName}</p>
+        {item.outOfRange ? (
+          <p className="text-sm text-gray-400 mt-1">
+            Not sold nearby — nearest: {storeLabel(item.outOfRange)}
+            {item.outOfRange.distanceKm != null && `, ${Math.round(item.outOfRange.distanceKm)} km`}
+          </p>
+        ) : (
+          <p className="text-sm text-gray-400 mt-1">No current price</p>
+        )}
+      </div>
+    )
+  }
+  const tier = TIER_STYLES[offer.tier]
+  const unit = formatUnitPrice(offer)
+  const cheaper = nearby ? item.cheapestNearby : null
+  return (
+    <Link
+      href={`/product/${encodeURIComponent(offer.itemName)}`}
+      className="block bg-white rounded-xl border border-gray-200 px-4 py-3 hover:border-green-400 transition-colors"
+    >
+      <p className="text-xs text-gray-400">
+        {item.displayName}
+        {item.substituteFor && <span className="ml-1 text-amber-600">(alternative for {item.substituteFor})</span>}
+        {item.isCustom && <span className="ml-1 text-green-700">(your pick)</span>}
+      </p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-medium text-gray-800 truncate">{offer.itemName}</p>
+          <p className="text-xs text-gray-400 truncate">
+            {storeLabel(offer)}
+            {nearby && offer.distanceKm != null && ` · ${offer.distanceKm.toFixed(1)} km`}
+            <span className={`ml-1.5 ${tier.className}`}>
+              · {tier.label}{offer.tier !== 'estimated' && `, ${daysAgoLabel(offer.observedAt)}`}
+            </span>
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-sm font-bold text-gray-800">${(offer.priceCents / 100).toFixed(2)}</p>
+          {unit && <p className="text-xs text-gray-400">{unit}</p>}
+        </div>
+      </div>
+      {cheaper && (
+        <p className="text-xs text-green-700 mt-1">
+          Cheaper nearby: ${(cheaper.priceCents / 100).toFixed(2)} at {storeLabel(cheaper)}
+          {cheaper.distanceKm != null && ` (${cheaper.distanceKm.toFixed(1)} km)`}
+        </p>
+      )}
+    </Link>
+  )
+}
+
+function groupSubtitle(group: EssentialsGroup['group']): string {
+  return GROUP_SUBTITLES[group]
+}
+
 type Status = 'idle' | 'loading' | 'ready' | 'ready-overseas' | 'denied' | 'error' | 'no-coverage'
 
-export default function NearbyEssential({ groupedGroups }: { groupedGroups: GroupedGroup[] }) {
+export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { groups: EssentialsGroup[]; dietaryFlagsByFoodId: Record<string, string[]> }) {
   const [status, setStatus] = useState<Status>('idle')
-  const [results, setResults] = useState<NearbyResult[] | null>(null)
-  const [nearestStore, setNearestStore] = useState<string | null>(null)
+  const [nearbyGroups, setNearbyGroups] = useState<EssentialsGroup[] | null>(null)
   const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
   const [countryName, setCountryName] = useState<string | null>(null)
   const { setIsConfirmedNZ } = useLocationMode()
@@ -150,18 +183,14 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
   // Phase 3: anonymous, browser-local dietary-restriction filter -- scoped to the default browse
   // view only (the one with real dietaryFlags data attached server-side); "Use my location" and
   // overseas results don't carry per-product dietary data, a stated boundary not a silent gap.
-  const [selectedRestrictions, setSelectedRestrictions] = useState<string[]>([])
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(DIETARY_STORAGE_KEY)
-      if (raw) setSelectedRestrictions(JSON.parse(raw))
-    } catch {
-      // Private browsing / blocked storage -- just start with no restrictions selected.
-    }
-  }, [])
+  // Read through useSyncExternalStore, not setState in an effect (cascading-render lint error):
+  // the server and first client render see no saved filter, then the stored one.
+  const storedRestrictions = useSyncExternalStore(subscribeToStorage, readStoredRestrictions, () => null)
+  const [chosenRestrictions, setChosenRestrictions] = useState<string[] | null>(null)
+  const selectedRestrictions = chosenRestrictions ?? parseRestrictions(storedRestrictions)
   function toggleRestriction(id: string) {
     const next = selectedRestrictions.includes(id) ? selectedRestrictions.filter((r) => r !== id) : [...selectedRestrictions, id]
-    setSelectedRestrictions(next)
+    setChosenRestrictions(next)
     try {
       localStorage.setItem(DIETARY_STORAGE_KEY, JSON.stringify(next))
     } catch {
@@ -196,8 +225,7 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
             setStatus('no-coverage')
             return
           }
-          setResults(data.results)
-          setNearestStore(data.nearestStore)
+          setNearbyGroups(data.groups)
           setStatus('ready')
         } catch {
           setStatus('error')
@@ -264,53 +292,27 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
     )
   }
 
-  if (status === 'ready' && results) {
-    const grouped = groupOrder(results)
-
+  if (status === 'ready' && nearbyGroups) {
     return (
       <div>
         <div className="flex items-center justify-between gap-4 mb-6 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
           <p className="text-sm text-green-800">
-            Showing the real nearest price for each essential food{nearestStore ? ` — nearest store: ${nearestStore}` : ''}.
+            Showing each essential food at the nearest store that sells it, within 50 km — the same prices RecipeBot shows.
           </p>
           <button onClick={() => setStatus('idle')} className="text-xs text-green-700 hover:underline shrink-0">
-            Show all variants instead
+            Show cheapest in NZ instead
           </button>
         </div>
         <div className="space-y-8">
-          {grouped.map(({ group, items }) => (
-              <div key={group}>
-                <h3 className="text-xl font-bold text-gray-800 mb-1">{GROUP_LABELS[group]}</h3>
-                <p className="text-xs text-gray-400 mb-3">{GROUP_SUBTITLES[group]}</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {items.map((r) => (
-                    <div key={r.foodId} className="bg-white rounded-xl border border-gray-200 px-4 py-3">
-                      <p className="text-xs text-gray-400">{r.displayName}</p>
-                      {r.match ? (
-                        <>
-                          <Link href={`/product/${encodeURIComponent(r.match.itemName)}`} className="block font-medium text-gray-800 hover:text-green-600 truncate">
-                            {r.match.itemName}
-                          </Link>
-                          <div className="flex items-center justify-between mt-1">
-                            <p className="text-xs text-gray-500">
-                              {CHAIN_LABELS[r.match.chain] ?? r.match.chain} · {r.match.distanceKm.toFixed(1)}km
-                              {r.substituteFor && (
-                                <span className="ml-1 text-amber-600">
-                                  ({r.substituteRelationshipType ? RELATIONSHIP_LABELS[r.substituteRelationshipType] : 'alternative'})
-                                </span>
-                              )}
-                            </p>
-                            <p className="text-sm font-bold text-gray-800">${(r.match.priceCents / 100).toFixed(2)}</p>
-                          </div>
-                        </>
-                      ) : (
-                        <p className="text-sm text-gray-400 mt-1">Not available nearby</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
+          {nearbyGroups.map((g) => (
+            <div key={g.group}>
+              <h3 className="text-xl font-bold text-gray-800 mb-1">{g.label}</h3>
+              <p className="text-xs text-gray-400 mb-3">{groupSubtitle(g.group)}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {g.items.map((item) => <EssentialCard key={item.defaultFoodId} item={item} nearby />)}
               </div>
-            ))}
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -330,14 +332,14 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
         {status === 'loading' && (
           <p className="text-sm text-gray-500">Finding the nearest real prices — this can take a few seconds…</p>
         )}
-        {status === 'denied' && <p className="text-sm text-gray-400">Location unavailable — showing all real variants instead.</p>}
-        {status === 'error' && <p className="text-sm text-gray-400">Couldn&apos;t look up nearby prices — showing all real variants instead.</p>}
-        {status === 'no-coverage' && <p className="text-sm text-gray-400">No real covered store found near you — showing all real variants instead.</p>}
+        {status === 'denied' && <p className="text-sm text-gray-400">Location unavailable — showing the cheapest price in NZ instead.</p>}
+        {status === 'error' && <p className="text-sm text-gray-400">Couldn&apos;t look up nearby prices — showing the cheapest price in NZ instead.</p>}
+        {status === 'no-coverage' && <p className="text-sm text-gray-400">No covered store within 50 km of you — showing the cheapest price in NZ instead.</p>}
       </div>
 
-      {groupedGroups.length === 0 ? (
+      {groups.length === 0 ? (
         <p className="text-sm text-gray-400 bg-white rounded-xl border border-dashed border-gray-200 px-4 py-10 text-center">
-          No products flagged essential yet.
+          Prices are unavailable right now — please try again shortly.
         </p>
       ) : (
         <div className="space-y-8">
@@ -362,51 +364,23 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
               ))}
             </div>
           </div>
-          {groupedGroups.map((group) => {
-            const filteredProducts =
+          {groups.map((g) => {
+            const items =
               selectedRestrictions.length === 0
-                ? group.products
-                : group.products.filter((p) => isRestrictionCompliant(p.dietaryFlags, selectedRestrictions))
-            if (filteredProducts.length === 0) return null
+                ? g.items
+                : g.items.filter((i) => isRestrictionCompliant(dietaryFlagsByFoodId[i.foodId] ?? [], selectedRestrictions))
+            if (items.length === 0) return null
             return (
-            <div key={group.group}>
-              <div className="flex items-baseline gap-2 mb-1">
-                <h3 className="text-xl font-bold text-gray-800">{group.label}</h3>
-                <span className="text-sm text-gray-400">{filteredProducts.length} product{filteredProducts.length === 1 ? '' : 's'}</span>
+              <div key={g.group}>
+                <div className="flex items-baseline gap-2 mb-1">
+                  <h3 className="text-xl font-bold text-gray-800">{g.label}</h3>
+                  <span className="text-sm text-gray-400">{items.length} food{items.length === 1 ? '' : 's'}</span>
+                </div>
+                <p className="text-xs text-gray-400 mb-3">{groupSubtitle(g.group)}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {items.map((item) => <EssentialCard key={item.defaultFoodId} item={item} nearby={false} />)}
+                </div>
               </div>
-              <p className="text-xs text-gray-400 mb-3">{GROUP_SUBTITLES[group.group]}</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {filteredProducts.map((p) => (
-                  <Link
-                    key={p.itemName}
-                    href={`/product/${encodeURIComponent(p.itemName)}`}
-                    className="flex items-center justify-between bg-white rounded-xl border border-gray-200 px-4 py-3 hover:border-green-400 transition-colors"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-medium text-gray-800 truncate">{p.itemName}</p>
-                      <p className="text-xs text-gray-400 truncate">
-                        {p.brand ?? 'No brand recorded'}
-                        {p.tier === 'estimated' ? (
-                          <span className="ml-1.5 text-amber-600 font-medium">Estimated</span>
-                        ) : p.tier === 'recent' ? (
-                          <span className="ml-1.5 text-sky-700">· Recent, {daysAgoLabel(p.lowestPriceAsOf)}</span>
-                        ) : (
-                          <span className="ml-1.5 text-green-700">· Live, {daysAgoLabel(p.lowestPriceAsOf)}</span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0 ml-3">
-                      <p className="text-sm font-bold text-gray-800">${(p.lowestPriceCents / 100).toFixed(2)}</p>
-                      {p.unitPriceCentsPerKg !== null && (
-                        <p className="text-xs text-gray-400">
-                          {p.unitPriceIsAssumed ? '~' : ''}${(p.unitPriceCentsPerKg / 100).toFixed(2)}/kg
-                        </p>
-                      )}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </div>
             )
           })}
         </div>

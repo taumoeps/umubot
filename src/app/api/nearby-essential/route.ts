@@ -1,37 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { findNearbyLocations, resolveNearestFood, getRealBasketFoods, getRelationshipTypes } from '@/lib/nearbyEssential'
+import { fetchEssentials, NEARBY_RADIUS_KM } from '@/lib/essentialsClient'
 import { reverseGeocodeCountry, resolveOverseasEssentials } from '@/lib/overseasEssential'
 
-// UmuBot -- real nearest-store lookup for the real 22-item essential
-// basket, triggered ONLY by an explicit user action (the "Use my
-// location" button client-side) -- never an automatic background scan,
-// per Baskt's own usage terms (see nearbyEssential.ts's module doc).
-//
-// Bounded concurrency (not all 22 foods at once) -- same "small
-// concurrent batches, gentle on Baskt's public endpoint" discipline as
-// mosaro's basktSync.ts.
-//
-// Country-aware since 2026-10-13 (operator request, after confirming
-// RecipeBot's iOS app already has real, tested non-NZ support in its
-// own authenticated Today pipeline -- this ports the two real, non-AI
-// tiers of that same fallback chain for this public site, see
-// overseasEssential.ts's module doc for the full reasoning and real
-// limits). Reverse-geocodes the same real GPS coordinates this button
-// already collects; NZ stays on the existing Baskt-backed flow
-// unchanged, anything else switches to the overseas resolver. If
-// reverse-geocoding itself fails, falls back to the NZ flow's own
-// existing noCoverage path rather than guessing a country.
+// UmuBot -- "Use my location" for the essential basket, triggered only by the
+// explicit button client-side. NZ (2026-10-21, Essentials alignment plan, step 5):
+// a thin proxy to mosaro's shared essentials service, so the website and
+// RecipeBot's Today show the same product at the same nearest store. Overseas:
+// unchanged -- reverse-geocode, then overseasEssential.ts's two non-AI tiers,
+// until the shared service covers other countries. If reverse-geocoding
+// fails, the NZ path answers (a location failure shouldn't block the site).
 
 export const maxDuration = 60
-
-async function runBatched<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = []
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency)
-    results.push(...(await Promise.all(batch.map(fn))))
-  }
-  return results
-}
 
 export async function GET(req: NextRequest) {
   const lat = parseFloat(req.nextUrl.searchParams.get('lat') ?? '')
@@ -56,18 +35,13 @@ export async function GET(req: NextRequest) {
   // confirmed-NZ result, not merely "we couldn't tell").
   const confirmedNZ = country?.countryCode === 'NZ'
 
-  const [locations, foods, relationshipTypes] = await Promise.all([
-    findNearbyLocations(lat, lng, 2),
-    getRealBasketFoods(),
-    getRelationshipTypes(),
-  ])
-
-  if (locations.length === 0) {
-    return NextResponse.json({ mode: 'nz', confirmedNZ, results: [], nearestStore: null, noCoverage: true })
+  // NZ: the shared essentials service (mosaro), same answer as RecipeBot's Today.
+  try {
+    const essentials = await fetchEssentials({ lat, lng, radiusKm: NEARBY_RADIUS_KM })
+    const noCoverage = essentials.groups.every((g) => g.items.every((i) => !i.representative))
+    return NextResponse.json({ mode: 'nz', confirmedNZ, groups: essentials.groups, noCoverage })
+  } catch (err) {
+    console.error('[nearby-essential] essentials service error:', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Could not load nearby prices' }, { status: 502 })
   }
-
-  const foodsById = new Map(foods.map((f) => [f.id, f]))
-  const results = await runBatched(foods, 4, (food) => resolveNearestFood(food, locations, foodsById, relationshipTypes))
-
-  return NextResponse.json({ mode: 'nz', confirmedNZ, results, nearestStore: locations[0]?.name ?? null, noCoverage: false })
 }

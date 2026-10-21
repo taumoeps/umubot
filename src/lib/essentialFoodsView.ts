@@ -169,11 +169,6 @@ interface ObservationRow {
   source: string
 }
 
-interface CategoryRow {
-  id: string
-  label: string
-}
-
 interface BasketFoodRow {
   id: string
   category: string
@@ -323,91 +318,11 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   return Array.from(byItemName.values())
 }
 
-/** True when `candidate` should replace `current` as a food's
- *  representative -- tier first, then plain-ness, then price (see
- *  getEssentialProductsByCategory's own doc for why this order). */
-function isBetterRepresentative(candidate: EssentialProduct, current: EssentialProduct): boolean {
-  if (TIER_RANK[candidate.tier] !== TIER_RANK[current.tier]) return TIER_RANK[candidate.tier] > TIER_RANK[current.tier]
-
-  const candidatePlain = looksPlain(candidate.itemName)
-  const currentPlain = looksPlain(current.itemName)
-  if (currentPlain && !candidatePlain) return false
-  if (!currentPlain && candidatePlain) return true
-
-  return candidate.lowestPriceCents < current.lowestPriceCents
-}
-
-export async function getEssentialProductsByCategory(): Promise<{ category: string; label: string; products: EssentialProduct[] }[]> {
-  const [allProducts, categoriesResult] = await Promise.all([
-    getAllFlaggedProducts(),
-    supabase.from('essential_food_categories').select('id, label').order('sort_order', { ascending: true }),
-  ])
-  if (categoriesResult.error) throw new Error(categoriesResult.error.message)
-
-  // Collapse to one representative per essential-food concept
-  // (food_id), in strict priority order: (1) tier -- a live item always
-  // wins over an estimate regardless of nominal price; (2) plain-ness
-  // -- within the same tier, a plain product (PROCESSED_KEYWORDS/
-  // looksPlain above) always wins over a processed one regardless of
-  // price, the real fix for "Beef Steak Sausages" representing "Beef
-  // steak"; (3) price -- within the same tier and plain-ness, cheapest
-  // wins. Only categories with at least one flagged product show -- an
-  // empty category here would be exactly the clutter the operator
-  // flagged live, 2026-10-11.
-  const byCategory = new Map<string, Map<string, EssentialProduct>>()
-  for (const p of allProducts) {
-    if (!byCategory.has(p.categorySlug)) byCategory.set(p.categorySlug, new Map())
-    const repByFoodId = byCategory.get(p.categorySlug)!
-    const existing = repByFoodId.get(p.foodId)
-    if (!existing || isBetterRepresentative(p, existing)) repByFoodId.set(p.foodId, p)
-  }
-
-  return ((categoriesResult.data ?? []) as CategoryRow[])
-    .filter((c) => byCategory.has(c.id))
-    .map((c) => ({
-      category: c.id,
-      label: c.label,
-      products: Array.from(byCategory.get(c.id)!.values()).sort((a, b) => a.itemName.localeCompare(b.itemName)),
-    }))
-}
-
-/** Same real representative-selection logic as getEssentialProductsByCategory above (tier, then
- *  plain-ness, then price), grouped by essential_group ('pantry' | 'nutrition') instead of
- *  supermarket category -- the Today v2 Pantry/Nutrition split from essential-foods-redesign.md,
- *  added 2026-10-18 once the real essential_group column existed and the 25 live basket-slot
- *  rows were backfilled (see essential-foods-phase2-backfill.md).
- *
- *  Pantry always returned first, Nutrition second -- the established convention across every
- *  essential-foods design doc this session produced, not an arbitrary choice here.
- *
- *  A food whose essential_group is still NULL (not yet classified -- see the FlaggedProduct
- *  mapping above) is excluded from this view entirely, not guessed into either bucket and not
- *  shown in a confusing third "unclassified" section. This is the minimum safeguard
- *  essential-foods-implementation.md Sec10's revised Phase 2 scope requires shipping alongside
- *  the UI, not after it: better to under-show than to show a food under the wrong one of two
- *  user-facing, meaningfully different sections. Currently a no-op (all 25 real basket-slot rows
- *  are classified), but protects correctness the moment an unclassified candidate food is added. */
-export async function getEssentialProductsByGroup(): Promise<{ group: 'pantry' | 'nutrition'; label: string; products: EssentialProduct[] }[]> {
-  const allProducts = await getAllFlaggedProducts()
-
-  const byGroup = new Map<'pantry' | 'nutrition', Map<string, EssentialProduct>>()
-  for (const p of allProducts) {
-    if (p.essentialGroup === null) continue // unclassified -- see doc comment above
-    if (!byGroup.has(p.essentialGroup)) byGroup.set(p.essentialGroup, new Map())
-    const repByFoodId = byGroup.get(p.essentialGroup)!
-    const existing = repByFoodId.get(p.foodId)
-    if (!existing || isBetterRepresentative(p, existing)) repByFoodId.set(p.foodId, p)
-  }
-
-  const labels: Record<'pantry' | 'nutrition', string> = { pantry: 'Pantry Essentials', nutrition: 'Nutrition Essentials' }
-  return (['pantry', 'nutrition'] as const)
-    .filter((g) => byGroup.has(g))
-    .map((g) => ({
-      group: g,
-      label: labels[g],
-      products: Array.from(byGroup.get(g)!.values()).sort((a, b) => a.itemName.localeCompare(b.itemName)),
-    }))
-}
+// The homepage's per-food representative choice (getEssentialProductsByGroup /
+// getEssentialProductsByCategory / isBetterRepresentative) was removed 2026-10-21: the page now
+// reads mosaro's shared essentials service (essentialsClient.ts) so it shows the same product
+// as RecipeBot. What remains here lists ALL flagged variants of a food (product pages, the
+// budget planner), which the service doesn't provide.
 
 /** Every other real flagged variant of the same essential-food concept,
  *  cheapest first -- shown on a product's detail page so "Beef Mince
