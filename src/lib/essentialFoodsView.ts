@@ -1,6 +1,6 @@
 import { unstable_cache } from 'next/cache'
 import { supabase } from './supabase'
-import { confidenceTierForSource, type ConfidenceTier } from './confidence'
+import { tierFor, TIER_RANK, type ConfidenceTier } from './confidence'
 import { runPaginated } from './paginatedQuery'
 import { resolveWeight } from './packWeight'
 import { getDietaryFlagsByFoodId } from './dietaryFlags'
@@ -256,8 +256,10 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
     (r) => categoryByFoodId.has(r.food_id) && !hasFormMismatch(r.item_name, groupByFoodId.get(r.food_id) ?? null)
   )
 
-  // Per item: use ONLY its live-tier rows when it has any, else fall
-  // back to its estimated rows -- never mix the two for one item.
+  // Per item: use ONLY its best-tier rows (live > recent > estimated) --
+  // never mix tiers for one item. Rows older than MAX_AGE_DAYS have no tier
+  // and are dropped here (2026-10-21: a 30-day-old Sugar price was showing
+  // as current).
   const rowsByItem = new Map<string, ObservationRow[]>()
   for (const row of relevant) {
     if (!rowsByItem.has(row.item_name)) rowsByItem.set(row.item_name, [])
@@ -265,10 +267,12 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
   }
   const usableRows: { row: ObservationRow; tier: ConfidenceTier }[] = []
   for (const itemRows of rowsByItem.values()) {
-    const live = itemRows.filter((r) => confidenceTierForSource(r.source) === 'live')
-    const chosen = live.length > 0 ? live : itemRows
-    const tier: ConfidenceTier = live.length > 0 ? 'live' : 'estimated'
-    for (const row of chosen) usableRows.push({ row, tier })
+    const tiered = itemRows
+      .map((row) => ({ row, tier: tierFor(row.source, row.observed_at) }))
+      .filter((e): e is { row: ObservationRow; tier: ConfidenceTier } => e.tier !== null)
+    if (tiered.length === 0) continue
+    const best = Math.max(...tiered.map((e) => TIER_RANK[e.tier]))
+    for (const e of tiered) if (TIER_RANK[e.tier] === best) usableRows.push(e)
   }
 
   // Reduce to the latest observation per (item, chain) -- same
@@ -323,8 +327,7 @@ async function getAllFlaggedProductsUncached(): Promise<FlaggedProduct[]> {
  *  representative -- tier first, then plain-ness, then price (see
  *  getEssentialProductsByCategory's own doc for why this order). */
 function isBetterRepresentative(candidate: EssentialProduct, current: EssentialProduct): boolean {
-  if (current.tier === 'live' && candidate.tier === 'estimated') return false
-  if (current.tier === 'estimated' && candidate.tier === 'live') return true
+  if (TIER_RANK[candidate.tier] !== TIER_RANK[current.tier]) return TIER_RANK[candidate.tier] > TIER_RANK[current.tier]
 
   const candidatePlain = looksPlain(candidate.itemName)
   const currentPlain = looksPlain(current.itemName)

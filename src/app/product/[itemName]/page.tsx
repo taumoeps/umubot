@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { getProductDetail } from '@/lib/productDetailView'
 import { getOtherVariants } from '@/lib/essentialFoodsView'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
+import type { ConfidenceTier } from '@/lib/confidence'
 
 // UmuBot -- product detail page. Deliberately NOT Pricer's layout
 // (operator decision, 2026-10-11, after a direct side-by-side
@@ -34,12 +35,10 @@ const CHAIN_LABELS: Record<string, string> = {
   freshchoice: 'FreshChoice',
 }
 
-function TierBadge({ tier }: { tier: 'live' | 'estimated' }) {
-  return tier === 'live' ? (
-    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Live</span>
-  ) : (
-    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">Estimated</span>
-  )
+function TierBadge({ tier }: { tier: ConfidenceTier }) {
+  if (tier === 'live') return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Live</span>
+  if (tier === 'recent') return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-100 text-sky-700">Recent</span>
+  return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">Estimated</span>
 }
 
 export default async function ProductDetailPage({ params }: { params: Promise<{ itemName: string }> }) {

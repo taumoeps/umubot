@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { confidenceTierForSource, type ConfidenceTier } from './confidence'
+import { tierFor, type ConfidenceTier } from './confidence'
 import { cachedPaginatedQueryWithArg } from './paginatedQuery'
 
 // UmuBot -- real price history/today's-prices for one specific observed
@@ -79,15 +79,19 @@ export async function getProductDetail(itemName: string): Promise<ProductDetail 
     const existing = latestByChain.get(key)
     if (!existing || r.observed_at > existing.observed_at) latestByChain.set(key, r)
   }
-  const cheapestCents = Math.min(...Array.from(latestByChain.values()).map((r) => r.price_cents))
-  const todayByChain: TodayPrice[] = Array.from(latestByChain.entries())
-    .map(([chain, r]) => ({
+  // A chain whose latest price is older than MAX_AGE_DAYS isn't "today" at all.
+  const currentByChain = Array.from(latestByChain.entries())
+    .map(([chain, r]) => ({ chain, r, tier: tierFor(r.source, r.observed_at) }))
+    .filter((e): e is { chain: string; r: typeof e.r; tier: ConfidenceTier } => e.tier !== null)
+  const cheapestCents = Math.min(...currentByChain.map((e) => e.r.price_cents))
+  const todayByChain: TodayPrice[] = currentByChain
+    .map(({ chain, r, tier }) => ({
       chain,
       storeName: r.store_name,
       priceCents: r.price_cents,
       observedAt: r.observed_at,
       isCheapest: r.price_cents === cheapestCents,
-      tier: confidenceTierForSource(r.source),
+      tier,
     }))
     .sort((a, b) => a.priceCents - b.priceCents)
 

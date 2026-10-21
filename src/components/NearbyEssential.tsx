@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocationMode } from './LocationModeContext'
+import type { ConfidenceTier } from '@/lib/confidence'
 
 const DIETARY_STORAGE_KEY = 'umubot-dietary-restrictions'
 
@@ -43,7 +44,7 @@ interface FlatProduct {
   brand: string | null
   lowestPriceCents: number
   lowestPriceAsOf: string
-  tier: 'live' | 'estimated'
+  tier: ConfidenceTier
   unitPriceCentsPerKg: number | null
   unitPriceIsAssumed: boolean
   dietaryFlags: string[]
@@ -387,6 +388,8 @@ export default function NearbyEssential({ groupedGroups }: { groupedGroups: Grou
                         {p.brand ?? 'No brand recorded'}
                         {p.tier === 'estimated' ? (
                           <span className="ml-1.5 text-amber-600 font-medium">Estimated</span>
+                        ) : p.tier === 'recent' ? (
+                          <span className="ml-1.5 text-sky-700">· Recent, {daysAgoLabel(p.lowestPriceAsOf)}</span>
                         ) : (
                           <span className="ml-1.5 text-green-700">· Live, {daysAgoLabel(p.lowestPriceAsOf)}</span>
                         )}

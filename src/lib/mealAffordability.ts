@@ -116,8 +116,9 @@ function pickIngredientProduct(foodId: string, variants: EssentialProduct[]): In
     .map((v) => ({ v, w: resolveWeight(v.packSize, foodId) }))
     .filter((x): x is { v: EssentialProduct; w: ResolvedWeight } => x.w !== null)
 
-  const live = withWeight.filter((x) => x.v.tier === 'live')
-  const tierPool = live.length > 0 ? live : withWeight
+  // Best available tier first (live, then recent), else whatever is current.
+  const tierPool =
+    (['live', 'recent'] as const).map((t) => withWeight.filter((x) => x.v.tier === t)).find((p) => p.length > 0) ?? withWeight
   if (tierPool.length === 0) return null
 
   const plainReal = tierPool.filter((x) => !x.w.isAssumedWeight && looksPlain(x.v.itemName))
