@@ -2,8 +2,10 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useLocationMode } from './LocationModeContext'
+import { useAuth } from './AuthContext'
 
-// Public nav -- no auth, no sign-out. "Essential" (real products
+// Public nav. Optional sign-in at the bottom (2026-10-21) -- only adds a visitor's own food
+// replacements; every page works without it. "Essential" (real products
 // individually flagged essential) is the primary identity now, not a
 // copy of Pricer's full catalogue. "Price Index" replaced by "Food
 // Affordability" (operator decision, 2026-10-12) -- "how many meals
@@ -32,7 +34,7 @@ export default function Nav() {
   const { isConfirmedNZ } = useLocationMode()
   const links = isConfirmedNZ ? baseLinks : baseLinks.filter((l) => l.href !== '/products')
   return (
-    <aside className="w-56 min-h-screen bg-gray-900 text-white flex flex-col">
+    <aside className="w-56 h-screen sticky top-0 shrink-0 bg-gray-900 text-white flex flex-col">
       <div className="px-6 py-6 border-b border-gray-700">
         <h1 className="text-xl font-bold tracking-widest text-white">UmuBot</h1>
         <p className="text-xs text-gray-400 mt-1">Real NZ food prices</p>
@@ -60,6 +62,35 @@ export default function Nav() {
           )
         })}
       </nav>
+      <AccountBox />
     </aside>
+  )
+}
+
+function AccountBox() {
+  const { session, ready, signIn, signOut } = useAuth()
+  if (!ready) return <div className="px-6 py-5 border-t border-gray-700 h-24" />
+  if (session) {
+    const who = session.user.email ?? (session.user.user_metadata?.full_name as string | undefined) ?? 'Signed in'
+    return (
+      <div className="px-6 py-5 border-t border-gray-700">
+        <p className="text-xs text-gray-400">Signed in — your RecipeBot food picks apply here too.</p>
+        <p className="text-sm text-white truncate mt-1">{who}</p>
+        <button onClick={() => signOut()} className="text-xs text-gray-400 hover:text-white mt-2">
+          Sign out
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="px-6 py-5 border-t border-gray-700 space-y-2">
+      <p className="text-xs text-gray-400">Use your RecipeBot account to see and change your own food picks.</p>
+      <button onClick={() => signIn('apple')} className="w-full text-sm py-2 rounded-lg bg-white text-gray-900 font-medium hover:bg-gray-200">
+        Sign in with Apple
+      </button>
+      <button onClick={() => signIn('google')} className="w-full text-sm py-2 rounded-lg border border-gray-600 text-white hover:bg-gray-800">
+        Sign in with Google
+      </button>
+    </div>
   )
 }

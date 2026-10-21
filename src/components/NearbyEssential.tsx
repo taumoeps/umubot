@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { useLocationMode } from './LocationModeContext'
-import { formatUnitPrice, storeLabel, type EssentialItem, type EssentialsGroup, type Offer } from '@/lib/essentialsClient'
+import { fetchEssentials, formatUnitPrice, MOSARO_URL, NEARBY_RADIUS_KM, storeLabel, type EssentialItem, type EssentialsGroup, type Offer } from '@/lib/essentialsClient'
+import { useAuth } from './AuthContext'
 
 const DIETARY_STORAGE_KEY = 'umubot-dietary-restrictions'
 
@@ -109,61 +110,124 @@ const TIER_STYLES: Record<Offer['tier'], { label: string; className: string }> =
   estimated: { label: 'Estimated', className: 'text-amber-600 font-medium' },
 }
 
+/** Signed-in replacement actions for one card; absent for anonymous visitors. */
+interface ReplaceActions {
+  replace: (defaultFoodId: string, foodName: string) => Promise<string | null>
+  revert: (defaultFoodId: string) => Promise<string | null>
+}
+
 /** One essential food as mosaro's essentials service chose it -- the same product
  *  RecipeBot's Today shows. `nearby` adds distance and the cheaper-store line. */
-function EssentialCard({ item, nearby }: { item: EssentialItem; nearby: boolean }) {
+function EssentialCard({ item, nearby, actions }: { item: EssentialItem; nearby: boolean; actions?: ReplaceActions }) {
   const offer = item.representative
-  if (!offer) {
-    return (
-      <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
-        <p className="text-xs text-gray-400">{item.displayName}</p>
-        {item.outOfRange ? (
-          <p className="text-sm text-gray-400 mt-1">
-            Not sold nearby — nearest: {storeLabel(item.outOfRange)}
-            {item.outOfRange.distanceKm != null && `, ${Math.round(item.outOfRange.distanceKm)} km`}
-          </p>
-        ) : (
-          <p className="text-sm text-gray-400 mt-1">No current price</p>
-        )}
-      </div>
-    )
-  }
-  const tier = TIER_STYLES[offer.tier]
-  const unit = formatUnitPrice(offer)
+  const tier = offer ? TIER_STYLES[offer.tier] : null
+  const unit = offer ? formatUnitPrice(offer) : null
   const cheaper = nearby ? item.cheapestNearby : null
   return (
-    <Link
-      href={`/product/${encodeURIComponent(offer.itemName)}`}
-      className="block bg-white rounded-xl border border-gray-200 px-4 py-3 hover:border-green-400 transition-colors"
-    >
+    <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
       <p className="text-xs text-gray-400">
         {item.displayName}
         {item.substituteFor && <span className="ml-1 text-amber-600">(alternative for {item.substituteFor})</span>}
         {item.isCustom && <span className="ml-1 text-green-700">(your pick)</span>}
       </p>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-medium text-gray-800 truncate">{offer.itemName}</p>
-          <p className="text-xs text-gray-400 truncate">
-            {storeLabel(offer)}
-            {nearby && offer.distanceKm != null && ` · ${offer.distanceKm.toFixed(1)} km`}
-            <span className={`ml-1.5 ${tier.className}`}>
-              · {tier.label}{offer.tier !== 'estimated' && `, ${daysAgoLabel(offer.observedAt)}`}
-            </span>
-          </p>
-        </div>
-        <div className="text-right shrink-0">
-          <p className="text-sm font-bold text-gray-800">${(offer.priceCents / 100).toFixed(2)}</p>
-          {unit && <p className="text-xs text-gray-400">{unit}</p>}
-        </div>
-      </div>
-      {cheaper && (
-        <p className="text-xs text-green-700 mt-1">
-          Cheaper nearby: ${(cheaper.priceCents / 100).toFixed(2)} at {storeLabel(cheaper)}
-          {cheaper.distanceKm != null && ` (${cheaper.distanceKm.toFixed(1)} km)`}
+      {offer && tier ? (
+        <>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <Link href={`/product/${encodeURIComponent(offer.itemName)}`} className="block font-medium text-gray-800 hover:text-green-600 truncate">
+                {offer.itemName}
+              </Link>
+              <p className="text-xs text-gray-400 truncate">
+                {storeLabel(offer)}
+                {nearby && offer.distanceKm != null && ` · ${offer.distanceKm.toFixed(1)} km`}
+                <span className={`ml-1.5 ${tier.className}`}>
+                  · {tier.label}{offer.tier !== 'estimated' && `, ${daysAgoLabel(offer.observedAt)}`}
+                </span>
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-sm font-bold text-gray-800">${(offer.priceCents / 100).toFixed(2)}</p>
+              {unit && <p className="text-xs text-gray-400">{unit}</p>}
+            </div>
+          </div>
+          {cheaper && (
+            <p className="text-xs text-green-700 mt-1">
+              Cheaper nearby: ${(cheaper.priceCents / 100).toFixed(2)} at {storeLabel(cheaper)}
+              {cheaper.distanceKm != null && ` (${cheaper.distanceKm.toFixed(1)} km)`}
+            </p>
+          )}
+        </>
+      ) : item.outOfRange ? (
+        <p className="text-sm text-gray-400 mt-1">
+          Not sold nearby — nearest: {storeLabel(item.outOfRange)}
+          {item.outOfRange.distanceKm != null && `, ${Math.round(item.outOfRange.distanceKm)} km`}
         </p>
+      ) : (
+        <p className="text-sm text-gray-400 mt-1">No current price</p>
       )}
-    </Link>
+      {actions && <ReplaceControls item={item} actions={actions} />}
+    </div>
+  )
+}
+
+function ReplaceControls({ item, actions }: { item: EssentialItem; actions: ReplaceActions }) {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  async function run(work: () => Promise<string | null>) {
+    setBusy(true)
+    setMessage(null)
+    const result = await work()
+    setBusy(false)
+    setMessage(result)
+    if (result === null) {
+      setEditing(false)
+      setName('')
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex gap-3 mt-2 text-xs">
+        <button onClick={() => setEditing(true)} className="text-green-700 hover:underline">
+          Change
+        </button>
+        {item.isCustom && (
+          <button disabled={busy} onClick={() => run(() => actions.revert(item.defaultFoodId))} className="text-gray-500 hover:underline disabled:opacity-50">
+            Use default
+          </button>
+        )}
+        {message && <span className="text-amber-600">{message}</span>}
+      </div>
+    )
+  }
+  return (
+    <form
+      className="mt-2 flex gap-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (name.trim()) run(() => actions.replace(item.defaultFoodId, name.trim()))
+      }}
+    >
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={60}
+        placeholder={`Instead of ${item.displayName}, e.g. "Tasty Cheese"`}
+        aria-label={`Replacement for ${item.displayName}`}
+        className="flex-1 min-w-0 text-sm px-2 py-1 border border-gray-300 rounded"
+      />
+      <button type="submit" disabled={busy || !name.trim()} className="text-xs px-2 py-1 rounded bg-green-600 text-white disabled:opacity-50">
+        {busy ? 'Saving…' : 'Save'}
+      </button>
+      <button type="button" onClick={() => setEditing(false)} className="text-xs text-gray-500">
+        Cancel
+      </button>
+      {message && <span className="text-xs text-amber-600 self-center">{message}</span>}
+    </form>
   )
 }
 
@@ -179,6 +243,53 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
   const [overseasResults, setOverseasResults] = useState<OverseasResult[] | null>(null)
   const [countryName, setCountryName] = useState<string | null>(null)
   const { setIsConfirmedNZ } = useLocationMode()
+  const { session } = useAuth()
+  const token = session?.access_token ?? null
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
+
+  // Signed in: this person's own version (their replacements applied), keyed by token so a
+  // sign-out or a different account never shows someone else's picks.
+  const [personal, setPersonal] = useState<{ token: string; groups: EssentialsGroup[] } | null>(null)
+  const [refreshCount, setRefreshCount] = useState(0)
+  useEffect(() => {
+    if (!token) return
+    let cancelled = false
+    fetchEssentials({ accessToken: token })
+      .then((r) => { if (!cancelled) setPersonal({ token, groups: r.groups }) })
+      .catch(() => { /* keep the public view */ })
+    return () => { cancelled = true }
+  }, [token, refreshCount])
+  const shownGroups = personal && personal.token === token ? personal.groups : groups
+
+  async function customFood(method: 'POST' | 'DELETE', body: object): Promise<Response> {
+    return fetch(`${MOSARO_URL}/api/food-prices/custom-food`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    })
+  }
+  const actions: ReplaceActions | undefined = token
+    ? {
+        async replace(defaultFoodId, foodName) {
+          // The route uses the location only for its instant "nearby price" preview; Wellington
+          // when the visitor hasn't shared one.
+          const at = coords ?? { lat: -41.2865, lng: 174.7762 }
+          const res = await customFood('POST', { defaultFoodId, foodName, latitude: at.lat, longitude: at.lng, radiusKm: NEARBY_RADIUS_KM })
+          if (!res.ok) return res.status === 401 ? 'Please sign in again.' : 'Couldn’t save that — try another name.'
+          const data = await res.json().catch(() => ({}))
+          setRefreshCount((n) => n + 1)
+          if (status === 'ready') refreshNearby()
+          return data.matched === false ? 'Saved — no nearby store has it yet, so the default shows meanwhile.' : null
+        },
+        async revert(defaultFoodId) {
+          const res = await customFood('DELETE', { defaultFoodId })
+          if (!res.ok) return 'Couldn’t undo that — please try again.'
+          setRefreshCount((n) => n + 1)
+          if (status === 'ready') refreshNearby()
+          return null
+        },
+      }
+    : undefined
 
   // Phase 3: anonymous, browser-local dietary-restriction filter -- scoped to the default browse
   // view only (the one with real dietaryFlags data attached server-side); "Use my location" and
@@ -198,6 +309,21 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
     }
   }
 
+  async function loadNearby(lat: number, lng: number) {
+    const res = await fetch(`/api/nearby-essential?lat=${lat}&lng=${lng}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  }
+
+  function refreshNearby() {
+    if (!coords) return
+    loadNearby(coords.lat, coords.lng)
+      .then((data) => { if (data.groups) setNearbyGroups(data.groups) })
+      .catch(() => { /* keep what's shown */ })
+  }
+
   function useMyLocation() {
     if (!navigator.geolocation) {
       setStatus('error')
@@ -206,9 +332,9 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
     setStatus('loading')
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude })
         try {
-          const res = await fetch(`/api/nearby-essential?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`)
-          const data = await res.json()
+          const data = await loadNearby(pos.coords.latitude, pos.coords.longitude)
           if (data.mode === 'overseas') {
             setOverseasResults(data.results)
             setCountryName(data.countryName)
@@ -309,7 +435,7 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
               <h3 className="text-xl font-bold text-gray-800 mb-1">{g.label}</h3>
               <p className="text-xs text-gray-400 mb-3">{groupSubtitle(g.group)}</p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {g.items.map((item) => <EssentialCard key={item.defaultFoodId} item={item} nearby />)}
+                {g.items.map((item) => <EssentialCard key={item.defaultFoodId} item={item} nearby actions={actions} />)}
               </div>
             </div>
           ))}
@@ -337,7 +463,7 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
         {status === 'no-coverage' && <p className="text-sm text-gray-400">No covered store within 50 km of you — showing the cheapest price in NZ instead.</p>}
       </div>
 
-      {groups.length === 0 ? (
+      {shownGroups.length === 0 ? (
         <p className="text-sm text-gray-400 bg-white rounded-xl border border-dashed border-gray-200 px-4 py-10 text-center">
           Prices are unavailable right now — please try again shortly.
         </p>
@@ -364,7 +490,7 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
               ))}
             </div>
           </div>
-          {groups.map((g) => {
+          {shownGroups.map((g) => {
             const items =
               selectedRestrictions.length === 0
                 ? g.items
@@ -378,7 +504,7 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
                 </div>
                 <p className="text-xs text-gray-400 mb-3">{groupSubtitle(g.group)}</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {items.map((item) => <EssentialCard key={item.defaultFoodId} item={item} nearby={false} />)}
+                  {items.map((item) => <EssentialCard key={item.defaultFoodId} item={item} nearby={false} actions={actions} />)}
                 </div>
               </div>
             )
