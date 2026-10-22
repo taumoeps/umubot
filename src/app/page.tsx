@@ -14,7 +14,8 @@ export const revalidate = 300
 export default async function HomePage() {
   let groups: EssentialsGroup[] = []
   try {
-    groups = (await fetchEssentials({}, { next: { revalidate } })).groups
+    // The redesign's full list (approved foods), not just the original 22 (decision D).
+    groups = (await fetchEssentials({ set: 'all' }, { next: { revalidate } })).groups
   } catch (err) {
     console.error('[home] essentials service unavailable:', err instanceof Error ? err.message : err)
   }

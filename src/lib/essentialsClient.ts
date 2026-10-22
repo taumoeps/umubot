@@ -41,6 +41,8 @@ export interface EssentialItem {
   outOfRange: Offer | null
   productScope: 'national' | 'local' | null
   variants: number
+  /** One of the original 22 basket foods. */
+  core?: boolean
 }
 
 export interface EssentialsGroup {
@@ -63,7 +65,7 @@ export const MOSARO_URL = process.env.NEXT_PUBLIC_MOSARO_URL ?? 'https://mosaro.
 export const NEARBY_RADIUS_KM = 50
 
 export async function fetchEssentials(
-  q: { lat?: number; lng?: number; radiusKm?: number; accessToken?: string } = {},
+  q: { lat?: number; lng?: number; radiusKm?: number; accessToken?: string; set?: 'basket' | 'all' } = {},
   init: RequestInit & { next?: { revalidate?: number } } = {}
 ): Promise<EssentialsResult> {
   const params = new URLSearchParams()
@@ -72,6 +74,7 @@ export async function fetchEssentials(
     params.set('lng', String(q.lng))
     params.set('radiusKm', String(q.radiusKm ?? NEARBY_RADIUS_KM))
   }
+  if (q.set === 'all') params.set('set', 'all')
   const url = `${MOSARO_URL}/api/essentials${params.size ? `?${params}` : ''}`
   const headers = new Headers(init.headers)
   if (q.accessToken) headers.set('Authorization', `Bearer ${q.accessToken}`)

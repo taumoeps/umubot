@@ -254,7 +254,7 @@ export default function NearbyEssential({ groups, dietaryFlagsByFoodId }: { grou
   useEffect(() => {
     if (!token) return
     let cancelled = false
-    fetchEssentials({ accessToken: token })
+    fetchEssentials({ accessToken: token, set: 'all' })
       .then((r) => { if (!cancelled) setPersonal({ token, groups: r.groups }) })
       .catch(() => { /* keep the public view */ })
     return () => { cancelled = true }

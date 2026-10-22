@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   try {
     // A signed-in visitor's access token is passed through, so their replacements apply.
     const accessToken = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || undefined
-    const essentials = await fetchEssentials({ lat, lng, radiusKm: NEARBY_RADIUS_KM, accessToken }, { cache: 'no-store' })
+    const essentials = await fetchEssentials({ lat, lng, radiusKm: NEARBY_RADIUS_KM, accessToken, set: 'all' }, { cache: 'no-store' })
     const noCoverage = essentials.groups.every((g) => g.items.every((i) => !i.representative))
     return NextResponse.json({ mode: 'nz', confirmedNZ, groups: essentials.groups, noCoverage })
   } catch (err) {
