@@ -27,6 +27,8 @@ export interface Offer {
   tier: FreshnessTier
   source: string
   promoFlag: boolean
+  /** One serving of the food at this price (EssentialItem.servingLabel says how much). */
+  servingCents?: number | null
 }
 
 export interface EssentialItem {
@@ -43,6 +45,9 @@ export interface EssentialItem {
   variants: number
   /** One of the original 22 basket foods. */
   core?: boolean
+  servingLabel?: string | null
+  /** Typical storage life, unopened. */
+  shelfLifeDays?: number | null
 }
 
 export interface EssentialsGroup {
@@ -94,4 +99,22 @@ const CHAIN_LABELS: Record<string, string> = { paknsave: "PAK'nSAVE", 'new-world
 
 export function storeLabel(offer: Pick<Offer, 'storeName' | 'chain'>): string {
   return offer.storeName ?? (offer.chain ? (CHAIN_LABELS[offer.chain] ?? offer.chain) : 'Unknown store')
+}
+
+/** "keeps ~2 years" / "~3 months" / "~2 weeks" / "5 days" -- a guide, the pack's own date wins. */
+export function formatShelfLife(days: number | null | undefined): string | null {
+  if (days == null || days <= 0) return null
+  if (days < 14) return `${days} day${days === 1 ? '' : 's'}`
+  if (days < 60) return `~${Math.round(days / 7)} weeks`
+  if (days < 365) return `~${Math.round(days / 30)} months`
+  const years = Math.round((days / 365) * 2) / 2
+  return `~${years} year${years === 1 ? '' : 's'}`
+}
+
+/** "≈$0.20 per serving (75 g dry)" */
+export function formatServing(offer: Pick<Offer, 'servingCents'>, label: string | null | undefined): string | null {
+  if (offer.servingCents == null) return null
+  // A pinch of salt rounds to 0 cents: say so rather than "$0.00".
+  const price = offer.servingCents < 1 ? 'under 1¢' : `≈$${(offer.servingCents / 100).toFixed(2)}`
+  return `${price} per serving${label ? ` (${label})` : ''}`
 }

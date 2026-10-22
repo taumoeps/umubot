@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { useLocationMode } from './LocationModeContext'
-import { fetchEssentials, formatUnitPrice, MOSARO_URL, NEARBY_RADIUS_KM, storeLabel, type EssentialItem, type EssentialsGroup, type Offer } from '@/lib/essentialsClient'
+import { fetchEssentials, formatServing, formatShelfLife, formatUnitPrice, MOSARO_URL, NEARBY_RADIUS_KM, storeLabel, type EssentialItem, type EssentialsGroup, type Offer } from '@/lib/essentialsClient'
 import { useAuth } from './AuthContext'
 
 const DIETARY_STORAGE_KEY = 'umubot-dietary-restrictions'
@@ -150,6 +150,13 @@ function EssentialCard({ item, nearby, actions }: { item: EssentialItem; nearby:
               {unit && <p className="text-xs text-gray-400">{unit}</p>}
             </div>
           </div>
+          {(formatServing(offer, item.servingLabel) || formatShelfLife(item.shelfLifeDays)) && (
+            <p className="text-xs text-gray-500 mt-1">
+              {[formatServing(offer, item.servingLabel), formatShelfLife(item.shelfLifeDays) && `keeps ${formatShelfLife(item.shelfLifeDays)} unopened`]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          )}
           {cheaper && (
             <p className="text-xs text-green-700 mt-1">
               Cheaper nearby: ${(cheaper.priceCents / 100).toFixed(2)} at {storeLabel(cheaper)}
