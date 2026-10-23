@@ -90,6 +90,13 @@ export default function HowItWorksPage() {
           servings, and the cost moves with the price.
         </p>
         <p>
+          <strong>Avoiding waste:</strong>{' '}for fresh foods (those that keep 60 days or less) we show how
+          many servings the pack holds. When finishing it before it spoils would take more than one
+          serving a day, we say so — for example, a 700 g loaf is about 10 servings but keeps about 5
+          days — and suggest freezing some or buying smaller. Meat and fish sold by weight get a
+          reminder to buy only what you&apos;ll use before it spoils.
+        </p>
+        <p>
           <strong>Storage life</strong>{' '}is a typical figure for an <em>unopened</em>{' '}product kept as recommended. It is a
           guide only — the date on the pack always wins.
         </p>

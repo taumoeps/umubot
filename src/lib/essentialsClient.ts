@@ -50,6 +50,8 @@ export interface EssentialItem {
   shelfLifeDays?: number | null
   /** Nutrition for one serving (USDA data; labels use Food Standards Code thresholds). */
   nutrition?: { perServing: string; claims: string | null; note: string | null } | null
+  /** Servings in the pack shown vs how long it keeps, e.g. "≈10 servings in this pack and it keeps ~5 days…" */
+  wasteTip?: string | null
 }
 
 export interface EssentialsGroup {

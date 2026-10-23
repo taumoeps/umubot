@@ -163,6 +163,10 @@ function EssentialCard({ item, nearby, actions }: { item: EssentialItem; nearby:
               {item.nutrition.note && <span className="block text-gray-400">{item.nutrition.note}</span>}
             </p>
           )}
+          {item.wasteTip && (
+            // Amber only when it's advice ("buy smaller", "buy only what you'll use"); a plain count is grey.
+            <p className={`text-xs mt-1 ${/\bbuy\b/i.test(item.wasteTip) ? 'text-amber-700' : 'text-gray-500'}`}>{item.wasteTip}</p>
+          )}
           {cheaper && (
             <p className="text-xs text-green-700 mt-1">
               Cheaper nearby: ${(cheaper.priceCents / 100).toFixed(2)} at {storeLabel(cheaper)}
