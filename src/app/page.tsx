@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { fetchEssentials, type EssentialsGroup } from '@/lib/essentialsClient'
 import { getDietaryFlagsByFoodId } from '@/lib/dietaryFlags'
 import NearbyEssential from '@/components/NearbyEssential'
@@ -30,10 +31,11 @@ export default async function HomePage() {
         store in NZ — tap one to see other sizes & brands, cheapest to most expensive.
       </p>
       <p className="text-xs text-gray-400 mb-6 max-w-2xl">
-        Every price below is tagged <span className="text-green-600 font-medium">Live</span> (scanned
-        in the last 7 days), <span className="text-sky-700 font-medium">Recent</span> (scanned 8–30 days
-        ago) or <span className="text-amber-600 font-medium">Estimated</span> — never shown without saying
-        which. Prices older than 30 days aren&apos;t shown.
+        Every price below is tagged <span className="text-green-600 font-medium">Live</span>{' '}(scanned
+        in the last 7 days), <span className="text-sky-700 font-medium">Recent</span>{' '}(scanned 8–30 days
+        ago) or <span className="text-amber-600 font-medium">Estimated</span>{' '}— never shown without saying
+        which. Prices older than 30 days aren&apos;t shown.{' '}
+        <Link href="/how-it-works" className="text-green-700 hover:underline">How it works</Link>
       </p>
 
       <NearbyEssential groups={groups} dietaryFlagsByFoodId={dietaryFlagsByFoodId} />

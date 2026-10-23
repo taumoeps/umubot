@@ -27,6 +27,7 @@ const baseLinks = [
   { href: '/', label: 'Essential', icon: '▣' },
   { href: '/products', label: 'Grocery', icon: '▦' },
   { href: '/affordability', label: 'Budget', icon: '🍽' },
+  { href: '/how-it-works', label: 'How it works', icon: 'ⓘ' },
 ]
 
 export default function Nav() {
