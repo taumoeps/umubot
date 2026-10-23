@@ -95,6 +95,28 @@ export default function HowItWorksPage() {
         </p>
       </Section>
 
+      <Section title="Nutrition">
+        <p>
+          Each food shows energy, protein and fibre for one serving of the edible part — a whole snapper
+          serving is about 130 g of fish, and two eggs about 100 g. The values come from the US
+          Department of Agriculture&apos;s{' '}<strong>FoodData Central</strong>, using one hand-picked, unfortified
+          entry per food.
+        </p>
+        <p>
+          Labels such as{' '}<em>source of iron</em>{' '}or{' '}<em>good source of protein</em>{' '}use the same thresholds as food
+          packaging in New Zealand: the Australia New Zealand Food Standards Code (Schedule 4). For
+          example, a source of protein has at least 5 g per serving, and a source of a vitamin or mineral
+          has at least 10% of its recommended dietary intake. For omega-3 we check saturated fat only,
+          because the data has no trans-fat figures.
+        </p>
+        <p>
+          US foods aren&apos;t identical to New Zealand ones. Where that matters we say so — US white bread
+          has added iron and calcium, so we don&apos;t claim them for NZ bread, which instead must be made
+          with iodised salt. The US data has no iodine figures at all, so no food is labelled a source
+          of iodine. This is general information about foods, not dietary or medical advice.
+        </p>
+      </Section>
+
       <Section title="What the data can't tell you">
         <ul className="list-disc pl-5 space-y-1">
           <li>

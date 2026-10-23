@@ -48,6 +48,8 @@ export interface EssentialItem {
   servingLabel?: string | null
   /** Typical storage life, unopened. */
   shelfLifeDays?: number | null
+  /** Nutrition for one serving (USDA data; labels use Food Standards Code thresholds). */
+  nutrition?: { perServing: string; claims: string | null; note: string | null } | null
 }
 
 export interface EssentialsGroup {

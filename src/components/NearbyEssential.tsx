@@ -157,6 +157,12 @@ function EssentialCard({ item, nearby, actions }: { item: EssentialItem; nearby:
                 .join(' · ')}
             </p>
           )}
+          {item.nutrition && (item.nutrition.perServing || item.nutrition.claims || item.nutrition.note) && (
+            <p className="text-xs text-gray-500 mt-1">
+              {[item.nutrition.perServing, item.nutrition.claims].filter(Boolean).join(' · ')}
+              {item.nutrition.note && <span className="block text-gray-400">{item.nutrition.note}</span>}
+            </p>
+          )}
           {cheaper && (
             <p className="text-xs text-green-700 mt-1">
               Cheaper nearby: ${(cheaper.priceCents / 100).toFixed(2)} at {storeLabel(cheaper)}
