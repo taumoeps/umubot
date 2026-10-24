@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { getProductDetail } from '@/lib/productDetailView'
 import { getOtherVariants } from '@/lib/essentialFoodsView'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
+import { fetchFeatureFlags, fetchSizeComparison, formatUnitPrice, type SizeComparison } from '@/lib/essentialsClient'
 import type { ConfidenceTier } from '@/lib/confidence'
 
 // UmuBot -- product detail page. Deliberately NOT Pricer's layout
@@ -48,6 +49,14 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   if (!detail) notFound()
 
   const otherVariants = detail.foodId ? await getOtherVariants(detail.foodId, detail.itemName) : []
+  // Year 2 feature 2.1: the essentials service's size comparison (per-unit order, best value you can
+  // finish in time) replaces "Other sizes & brands" -- only when the compare-sizes switch is on and
+  // there are at least two sizes; otherwise the page is unchanged.
+  const flags = await fetchFeatureFlags({ next: { revalidate } })
+  const comparison = flags['compare-sizes'] && detail.foodId
+    ? await fetchSizeComparison(detail.foodId, {}, { next: { revalidate } }).catch(() => null)
+    : null
+  const showComparison = comparison != null && comparison.options.length >= 2
 
   const atLowest = detail.todayByChain.some((t) => t.priceCents === detail.lowestEverCents)
   const sameDay = detail.historyStartDate === detail.historyEndDate
@@ -93,7 +102,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           <div className="flex-1 min-w-[200px] rounded-lg bg-gray-50 px-4 py-3">
             <p className="text-xs text-gray-400">Right now</p>
             <p className={`text-sm font-semibold ${atLowest ? 'text-green-700' : 'text-gray-700'}`}>
-              {atLowest ? 'At its lowest observed price' : `$${((cheapest?.priceCents ?? 0) / 100).toFixed(2)} above lowest`}
+              {atLowest ? 'At its lowest observed price' : `$${(((cheapest?.priceCents ?? detail.lowestEverCents) - detail.lowestEverCents) / 100).toFixed(2)} above lowest`}
             </p>
           </div>
           <div className="flex-1 min-w-[200px] rounded-lg bg-gray-50 px-4 py-3">
@@ -124,7 +133,9 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
-      {otherVariants.length > 0 && (
+      {showComparison && <CompareSizes comparison={comparison!} current={detail.itemName} />}
+
+      {!showComparison && otherVariants.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-6">
           <div className="px-5 py-3 border-b border-gray-100">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Other sizes & brands</h3>
@@ -147,6 +158,46 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function CompareSizes({ comparison, current }: { comparison: SizeComparison; current: string }) {
+  const unit = comparison.options.find((o) => o.cheapestPerUnit)?.unitMeasure
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-6" data-testid="compare-sizes">
+      <div className="px-5 py-3 border-b border-gray-100">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Compare sizes</h3>
+        <p className="text-xs text-gray-400 mt-0.5">Cheapest {unit === 'ea' ? 'each' : `per ${unit ?? 'unit'}`} first, across New World and PAK&apos;nSAVE</p>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {comparison.options.map((o) => (
+          <Link
+            key={o.itemName}
+            href={`/product/${encodeURIComponent(o.itemName)}`}
+            className={`flex items-center justify-between px-5 py-3 hover:bg-gray-50 ${o.itemName === current ? 'bg-gray-50' : ''}`}
+          >
+            <div className="min-w-0">
+              <p className="font-medium text-gray-800 truncate">
+                {o.itemName}
+                {o.itemName === current && <span className="text-xs text-gray-400 font-normal"> (this product)</span>}
+              </p>
+              <p className="text-xs text-gray-400 truncate">
+                {[o.storeName, o.servingsPerPack != null ? `≈${Math.round(o.servingsPerPack)} servings` : null].filter(Boolean).join(' · ')}
+              </p>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {o.cheapestPerUnit && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Cheapest {o.unitMeasure === 'ea' ? 'each' : `per ${o.unitMeasure}`}</span>}
+                {o.bestValueInTime && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-100 text-sky-700">Best value you&apos;ll finish in time</span>}
+              </div>
+            </div>
+            <div className="text-right shrink-0 ml-4">
+              <p className="text-lg font-bold text-gray-800">${(o.priceCents / 100).toFixed(2)}</p>
+              {formatUnitPrice(o) && <p className="text-xs text-gray-400">{formatUnitPrice(o)}</p>}
+            </div>
+          </Link>
+        ))}
+      </div>
+      {comparison.note && <p className="px-5 py-3 text-xs text-gray-500 border-t border-gray-100">{comparison.note}</p>}
     </div>
   )
 }

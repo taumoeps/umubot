@@ -122,3 +122,59 @@ export function formatServing(offer: Pick<Offer, 'servingCents'>, label: string 
   const price = offer.servingCents < 1 ? 'under 1¢' : `≈$${(offer.servingCents / 100).toFixed(2)}`
   return `${price} per serving${label ? ` (${label})` : ''}`
 }
+
+// --- Year 2 feature 2.1: compare pack sizes (mosaro GET /api/essentials/compare) -------------
+
+export interface SizeOption {
+  itemName: string
+  packSize: string | null
+  priceCents: number
+  unitPriceCents: number | null
+  unitMeasure: UnitMeasure | null
+  storeName: string | null
+  chain: string | null
+  distanceKm: number | null
+  tier: FreshnessTier
+  observedAt: string
+  servingsPerPack: number | null
+  cheapestPerUnit: boolean
+  bestValueInTime: boolean
+}
+
+export interface SizeComparison {
+  foodId: string
+  displayName: string
+  shelfLifeDays: number | null
+  options: SizeOption[]
+  note: string | null
+}
+
+export async function fetchSizeComparison(
+  foodId: string,
+  q: { lat?: number; lng?: number; radiusKm?: number } = {},
+  init: RequestInit & { next?: { revalidate?: number } } = {}
+): Promise<SizeComparison | null> {
+  const params = new URLSearchParams({ food: foodId })
+  if (q.lat != null && q.lng != null) {
+    params.set('lat', String(q.lat))
+    params.set('lng', String(q.lng))
+    params.set('radiusKm', String(q.radiusKm ?? NEARBY_RADIUS_KM))
+  }
+  const res = await fetch(`${MOSARO_URL}/api/essentials/compare?${params}`, init)
+  if (!res.ok) return null
+  return (await res.json()) as SizeComparison
+}
+
+/** Feature switches (mosaro config/feature-flags.json). UMUBOT_PREVIEW_FLAGS (comma-separated,
+ *  server env, never set in production) turns switches on locally to preview a hidden feature. */
+export async function fetchFeatureFlags(init: RequestInit & { next?: { revalidate?: number } } = {}): Promise<Record<string, boolean>> {
+  let flags: Record<string, boolean> = {}
+  try {
+    const res = await fetch(`${MOSARO_URL}/api/feature-flags`, init)
+    if (res.ok) flags = ((await res.json()) as { flags?: Record<string, boolean> }).flags ?? {}
+  } catch {
+    // Switches unreadable = everything off: a hidden feature never appears by accident.
+  }
+  for (const name of (process.env.UMUBOT_PREVIEW_FLAGS ?? '').split(',').map((s) => s.trim()).filter(Boolean)) flags[name] = true
+  return flags
+}
