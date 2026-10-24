@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import { getProductDetail } from '@/lib/productDetailView'
 import { getOtherVariants } from '@/lib/essentialFoodsView'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
-import { fetchFeatureFlags, fetchSizeComparison, formatUnitPrice, type SizeComparison } from '@/lib/essentialsClient'
+import { fetchFeatureFlags, fetchSizeComparison, fetchSubstitutions, formatUnitPrice, type SizeComparison, type SubstitutionResult } from '@/lib/essentialsClient'
 import type { ConfidenceTier } from '@/lib/confidence'
 
 // UmuBot -- product detail page. Deliberately NOT Pricer's layout
@@ -57,6 +57,10 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     ? await fetchSizeComparison(detail.foodId, {}, { next: { revalidate } }).catch(() => null)
     : null
   const showComparison = comparison != null && comparison.options.length >= 2
+  // Year 2 feature 2.2: typed substitutions, when the typed-substitutions switch is on.
+  const swaps = flags['typed-substitutions'] && detail.foodId
+    ? await fetchSubstitutions(detail.foodId, {}, { next: { revalidate } }).catch(() => null)
+    : null
 
   const atLowest = detail.todayByChain.some((t) => t.priceCents === detail.lowestEverCents)
   const sameDay = detail.historyStartDate === detail.historyEndDate
@@ -135,6 +139,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
       {showComparison && <CompareSizes comparison={comparison!} current={detail.itemName} />}
 
+      {swaps && swaps.groups.length > 0 && <Alternatives swaps={swaps} />}
+
       {!showComparison && otherVariants.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-6">
           <div className="px-5 py-3 border-b border-gray-100">
@@ -198,6 +204,38 @@ function CompareSizes({ comparison, current }: { comparison: SizeComparison; cur
         ))}
       </div>
       {comparison.note && <p className="px-5 py-3 text-xs text-gray-500 border-t border-gray-100">{comparison.note}</p>}
+    </div>
+  )
+}
+
+function Alternatives({ swaps }: { swaps: SubstitutionResult }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-6" data-testid="alternatives">
+      <div className="px-5 py-3 border-b border-gray-100">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Alternatives to {swaps.displayName.toLowerCase()}</h3>
+        <p className="text-xs text-gray-400 mt-0.5">
+          Reasons use today&apos;s prices and nutrition per serving
+          {swaps.costPerServingCents != null && <> · {swaps.displayName} is about ${(swaps.costPerServingCents / 100).toFixed(2)} a serving</>}
+        </p>
+      </div>
+      {swaps.groups.map((g) => (
+        <div key={g.kind} className="border-b border-gray-100 last:border-b-0">
+          <p className="px-5 pt-3 text-xs font-semibold text-gray-600">{g.label}</p>
+          <div className="divide-y divide-gray-50">
+            {g.items.map((i) => (
+              <div key={i.foodId} className="flex items-start justify-between px-5 py-2.5">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800">{i.displayName}</p>
+                  {i.reason && <p className="text-xs text-gray-500">{i.reason}</p>}
+                </div>
+                {i.costPerServingCents != null && (
+                  <p className="text-sm font-semibold text-gray-700 shrink-0 ml-4">${(i.costPerServingCents / 100).toFixed(2)}<span className="text-xs font-normal text-gray-400"> /serving</span></p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

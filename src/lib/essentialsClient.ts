@@ -178,3 +178,25 @@ export async function fetchFeatureFlags(init: RequestInit & { next?: { revalidat
   for (const name of (process.env.UMUBOT_PREVIEW_FLAGS ?? '').split(',').map((s) => s.trim()).filter(Boolean)) flags[name] = true
   return flags
 }
+
+// --- Year 2 feature 2.2: typed substitutions (mosaro GET /api/essentials/swaps) ---------------
+
+export type SwapKind = 'direct' | 'culinary' | 'nutritional'
+export interface Substitution { foodId: string; displayName: string; kind: SwapKind; reason: string | null; costPerServingCents: number | null; approved: boolean }
+export interface SubstitutionResult { foodId: string; displayName: string; costPerServingCents: number | null; groups: { kind: SwapKind; label: string; items: Substitution[] }[] }
+
+export async function fetchSubstitutions(
+  foodId: string,
+  q: { lat?: number; lng?: number; radiusKm?: number } = {},
+  init: RequestInit & { next?: { revalidate?: number } } = {}
+): Promise<SubstitutionResult | null> {
+  const params = new URLSearchParams({ food: foodId })
+  if (q.lat != null && q.lng != null) {
+    params.set('lat', String(q.lat))
+    params.set('lng', String(q.lng))
+    params.set('radiusKm', String(q.radiusKm ?? NEARBY_RADIUS_KM))
+  }
+  const res = await fetch(`${MOSARO_URL}/api/essentials/swaps?${params}`, init)
+  if (!res.ok) return null
+  return (await res.json()) as SubstitutionResult
+}
