@@ -48,6 +48,8 @@ export interface EssentialItem {
   servingLabel?: string | null
   /** Typical storage life, unopened. */
   shelfLifeDays?: number | null
+  /** Opened / freezer life and a tip (Year 2 feature 2.3). */
+  storage?: FoodStorage | null
   /** Nutrition for one serving (USDA data; labels use Food Standards Code thresholds). */
   nutrition?: { perServing: string; claims: string | null; note: string | null } | null
   /** Servings in the pack shown vs how long it keeps, e.g. "≈10 servings in this pack and it keeps ~5 days…" */
@@ -72,6 +74,16 @@ export const MOSARO_URL = process.env.NEXT_PUBLIC_MOSARO_URL ?? 'https://mosaro.
 
 /** Same radius RecipeBot's Today uses by default on the operator's device. */
 export const NEARBY_RADIUS_KM = 50
+
+export interface FoodStorage { unopenedDays: number | null; openedDays: number | null; freezerDays: number | null; freezesWell: boolean; tip: string | null }
+
+/** "about 5 days", "about 3 months", "about 2 years" */
+export function formatKeeps(days: number): string {
+  if (days >= 365) { const y = Math.round(days / 365); return `about ${y} year${y === 1 ? '' : 's'}` }
+  if (days >= 60) { const m = Math.round(days / 30); return `about ${m} months` }
+  if (days >= 14) { const w = Math.round(days / 7); return `about ${w} weeks` }
+  return `about ${days} day${days === 1 ? '' : 's'}`
+}
 
 export async function fetchEssentials(
   q: { lat?: number; lng?: number; radiusKm?: number; accessToken?: string; set?: 'basket' | 'all' } = {},

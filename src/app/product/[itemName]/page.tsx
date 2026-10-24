@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import { getProductDetail } from '@/lib/productDetailView'
 import { getOtherVariants } from '@/lib/essentialFoodsView'
 import PriceHistoryChart from '@/components/PriceHistoryChart'
-import { fetchFeatureFlags, fetchSizeComparison, fetchSubstitutions, formatUnitPrice, type SizeComparison, type SubstitutionResult } from '@/lib/essentialsClient'
+import { fetchEssentials, fetchFeatureFlags, fetchSizeComparison, fetchSubstitutions, formatKeeps, formatUnitPrice, type FoodStorage, type SizeComparison, type SubstitutionResult } from '@/lib/essentialsClient'
 import type { ConfidenceTier } from '@/lib/confidence'
 
 // UmuBot -- product detail page. Deliberately NOT Pricer's layout
@@ -57,6 +57,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     ? await fetchSizeComparison(detail.foodId, {}, { next: { revalidate } }).catch(() => null)
     : null
   const showComparison = comparison != null && comparison.options.length >= 2
+  // Year 2 feature 2.3: storage life, when the storage-life switch is on (national essentials list).
+  const storage = flags['storage-life'] && detail.foodId
+    ? await fetchEssentials({ set: 'all' }, { next: { revalidate } })
+        .then((r) => r.groups.flatMap((g) => g.items).find((i) => i.foodId === detail.foodId)?.storage ?? null)
+        .catch(() => null)
+    : null
   // Year 2 feature 2.2: typed substitutions, when the typed-substitutions switch is on.
   const swaps = flags['typed-substitutions'] && detail.foodId
     ? await fetchSubstitutions(detail.foodId, {}, { next: { revalidate } }).catch(() => null)
@@ -136,6 +142,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           ))}
         </div>
       </div>
+
+      {storage && <Keeps storage={storage} />}
 
       {showComparison && <CompareSizes comparison={comparison!} current={detail.itemName} />}
 
@@ -236,6 +244,22 @@ function Alternatives({ swaps }: { swaps: SubstitutionResult }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function Keeps({ storage }: { storage: FoodStorage }) {
+  const parts = [
+    storage.unopenedDays != null ? `${storage.openedDays != null ? 'Unopened' : 'Keeps'} ${formatKeeps(storage.unopenedDays)}` : null,
+    storage.openedDays != null ? `Opened ${formatKeeps(storage.openedDays)}` : null,
+    storage.freezesWell && storage.freezerDays != null ? `Freezer ${formatKeeps(storage.freezerDays)}` : null,
+  ].filter(Boolean)
+  if (parts.length === 0 && !storage.tip) return null
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 mt-6" data-testid="keeps">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">How long it keeps</h3>
+      {parts.length > 0 && <p className="mt-1 text-sm font-medium text-gray-800">{parts.join(' · ')}</p>}
+      {storage.tip && <p className="mt-1 text-xs text-gray-500">{storage.tip}</p>}
     </div>
   )
 }
