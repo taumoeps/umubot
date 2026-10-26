@@ -212,3 +212,28 @@ export async function fetchSubstitutions(
   if (!res.ok) return null
   return (await res.json()) as SubstitutionResult
 }
+
+// --- Year 2 feature 2.5: budget basket (mosaro GET /api/essentials/basket) ---------------------
+
+export interface BasketLine { foodId: string; displayName: string; productName: string; storeName: string | null; portions: number; servingLabel: string | null; packs: number; costCents: number; lastsWeeks: number | null }
+export interface BudgetBasket {
+  budgetCents: number; adults: number; children: number; totalCents: number; fullBasketCents: number; fits: boolean
+  groups: { key: string; label: string; portionsNeeded: number; portionsCovered: number; lines: BasketLine[] }[]
+  fallsOff: { foodId: string; displayName: string; group: string; costCents: number }[]
+  note: string | null
+}
+
+export async function fetchBudgetBasket(
+  q: { budgetDollars: number; adults: number; children: number; lat?: number; lng?: number; radiusKm?: number },
+  init: RequestInit & { next?: { revalidate?: number } } = {}
+): Promise<BudgetBasket | null> {
+  const params = new URLSearchParams({ budget: String(q.budgetDollars), adults: String(q.adults), children: String(q.children) })
+  if (q.lat != null && q.lng != null) {
+    params.set('lat', String(q.lat))
+    params.set('lng', String(q.lng))
+    params.set('radiusKm', String(q.radiusKm ?? NEARBY_RADIUS_KM))
+  }
+  const res = await fetch(`${MOSARO_URL}/api/essentials/basket?${params}`, init)
+  if (!res.ok) return null
+  return (await res.json()) as BudgetBasket
+}
