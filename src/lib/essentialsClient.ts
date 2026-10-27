@@ -38,6 +38,8 @@ export interface EssentialItem {
   group: EssentialGroup | null
   isCustom: boolean
   substituteFor: string | null
+  /** 'direct' = the same food, 'culinary' = a cut that cooks the same way (Year 2 feature 2.2). */
+  substituteKind?: 'direct' | 'culinary' | null
   representative: Offer | null
   cheapestNearby: Offer | null
   outOfRange: Offer | null

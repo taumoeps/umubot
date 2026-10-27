@@ -127,7 +127,7 @@ function EssentialCard({ item, nearby, actions }: { item: EssentialItem; nearby:
     <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
       <p className="text-xs text-gray-400">
         {item.displayName}
-        {item.substituteFor && <span className="ml-1 text-amber-600">(alternative for {item.substituteFor})</span>}
+        {item.substituteFor && <span className="ml-1 text-amber-600">({item.substituteKind === 'culinary' ? `cooks like ${item.substituteFor}` : `instead of ${item.substituteFor}`})</span>}
         {item.isCustom && <span className="ml-1 text-green-700">(your pick)</span>}
       </p>
       {offer && tier ? (
