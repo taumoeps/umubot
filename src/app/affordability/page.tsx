@@ -4,7 +4,7 @@ import {
   MEAL_DEFINITIONS, type IngredientReference,
 } from '@/lib/mealAffordability'
 import MealPlanner from '@/components/MealPlanner'
-import { fetchBudgetBasket, fetchFeatureFlags, type BudgetBasket, type NutritionCoverage } from '@/lib/essentialsClient'
+import { fetchBudgetBasket, fetchFeatureFlags, fetchNutrientValue, type BudgetBasket, type NutritionCoverage } from '@/lib/essentialsClient'
 
 // UmuBot -- Food Affordability. Replaces Price Index in the nav
 // (operator decision, 2026-10-12): "how many meals can I make with $X
@@ -80,6 +80,7 @@ export default async function AffordabilityPage({
       </div>
 
       {tab === 'basket' && <BasketTab budget={sp.budget} adults={sp.adults} childrenCount={sp.children} showNutrition={flags['nutrition-coverage'] === true} />}
+      {tab === 'basket' && flags['nutrient-value'] === true && <CheapestNutrition />}
       {tab === 'budgets' && ingredients && <MealPlanner ingredientEntries={Array.from(ingredients.entries())} />}
       {tab === 'index' && ingredients && <AffordabilityIndexTab ingredients={ingredients} />}
       {tab === 'how-it-works' && <HowItWorksTab />}
@@ -289,6 +290,28 @@ function NutritionCard({ coverage }: { coverage: NutritionCoverage }) {
         })}
       </div>
       <p className="text-xs text-gray-400 mt-4">Against the Australia/NZ Nutrient Reference Values for {coverage.people} adult-equivalent{coverage.people === 1 ? '' : 's'} (a child counts as 0.7), using USDA food data. A guide for a household basket, not personal dietary advice.</p>
+    </div>
+  )
+}
+
+async function CheapestNutrition() {
+  const all = await Promise.all((['protein', 'iron', 'calcium', 'fibre'] as const).map((n) => fetchNutrientValue(n, { next: { revalidate } }).catch(() => null)))
+  const lists = all.filter((x): x is NonNullable<typeof x> => x != null && x.foods.length > 0)
+  if (lists.length === 0) return null
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5 mt-6" data-testid="cheapest-nutrition">
+      <h3 className="text-sm font-semibold text-gray-800">Cheapest nutrition right now</h3>
+      <p className="text-xs text-gray-400 mt-1">Foods that are a real source of each nutrient, ranked by what that nutrient costs at today&apos;s lowest prices in New Zealand.</p>
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {lists.map((l) => (
+          <div key={l.nutrient}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{l.label} <span className="normal-case font-normal text-gray-400">· {l.perLabel}</span></p>
+            <ol className="mt-1 space-y-0.5 text-sm text-gray-700">
+              {l.foods.slice(0, 3).map((f) => <li key={f.foodId} className="flex justify-between"><span>{f.displayName}</span><span className="tabular-nums">{fmt(f.centsPer)}</span></li>)}
+            </ol>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

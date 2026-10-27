@@ -246,3 +246,13 @@ export async function fetchBudgetBasket(
   if (!res.ok) return null
   return (await res.json()) as BudgetBasket
 }
+
+// --- Year 5 feature 5.2: cost per nutrient (mosaro GET /api/essentials/nutrient-value) ---------
+
+export interface NutrientValue { nutrient: string; label: string; perLabel: string; mode: 'nearby' | 'national'; foods: { foodId: string; displayName: string; centsPer: number; perServing: number; servingCents: number; servingLabel: string | null; storeName: string | null }[] }
+
+export async function fetchNutrientValue(nutrient: 'protein' | 'fibre' | 'iron' | 'calcium', init: RequestInit & { next?: { revalidate?: number } } = {}): Promise<NutrientValue | null> {
+  const res = await fetch(`${MOSARO_URL}/api/essentials/nutrient-value?nutrient=${nutrient}`, init)
+  if (!res.ok) return null
+  return (await res.json()) as NutrientValue
+}
