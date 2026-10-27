@@ -221,7 +221,12 @@ export interface BudgetBasket {
   groups: { key: string; label: string; portionsNeeded: number; portionsCovered: number; lines: BasketLine[] }[]
   fallsOff: { foodId: string; displayName: string; group: string; costCents: number }[]
   note: string | null
+  /** Year 2 feature 2.6 (shown behind the nutrition-coverage switch). */
+  nutrition?: NutritionCoverage | null
 }
+
+export interface NutrientCoverage { key: string; label: string; unit: string; amount: number; target: number; percent: number; status: 'covered' | 'most' | 'possible-gap' | 'no-data'; missingFor: string[]; note: string | null }
+export interface NutritionCoverage { people: number; nutrients: NutrientCoverage[]; summary: string }
 
 export async function fetchBudgetBasket(
   q: { budgetDollars: number; adults: number; children: number; lat?: number; lng?: number; radiusKm?: number },

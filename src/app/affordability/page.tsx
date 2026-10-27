@@ -4,7 +4,7 @@ import {
   MEAL_DEFINITIONS, type IngredientReference,
 } from '@/lib/mealAffordability'
 import MealPlanner from '@/components/MealPlanner'
-import { fetchBudgetBasket, fetchFeatureFlags, type BudgetBasket } from '@/lib/essentialsClient'
+import { fetchBudgetBasket, fetchFeatureFlags, type BudgetBasket, type NutritionCoverage } from '@/lib/essentialsClient'
 
 // UmuBot -- Food Affordability. Replaces Price Index in the nav
 // (operator decision, 2026-10-12): "how many meals can I make with $X
@@ -79,7 +79,7 @@ export default async function AffordabilityPage({
         ))}
       </div>
 
-      {tab === 'basket' && <BasketTab budget={sp.budget} adults={sp.adults} childrenCount={sp.children} />}
+      {tab === 'basket' && <BasketTab budget={sp.budget} adults={sp.adults} childrenCount={sp.children} showNutrition={flags['nutrition-coverage'] === true} />}
       {tab === 'budgets' && ingredients && <MealPlanner ingredientEntries={Array.from(ingredients.entries())} />}
       {tab === 'index' && ingredients && <AffordabilityIndexTab ingredients={ingredients} />}
       {tab === 'how-it-works' && <HowItWorksTab />}
@@ -184,7 +184,7 @@ const clampInt = (raw: string | undefined, fallback: number, min: number, max: n
   return Number.isFinite(n) && raw != null && raw !== '' ? Math.min(max, Math.max(min, n)) : fallback
 }
 
-async function BasketTab({ budget, adults, childrenCount }: { budget?: string; adults?: string; childrenCount?: string }) {
+async function BasketTab({ budget, adults, childrenCount, showNutrition }: { budget?: string; adults?: string; childrenCount?: string; showNutrition: boolean }) {
   const q = { budgetDollars: clampInt(budget, 120, 10, 2000), adults: clampInt(adults, 2, 1, 10), children: clampInt(childrenCount, 0, 0, 10) }
   const basket: BudgetBasket | null = await fetchBudgetBasket(q, { next: { revalidate } }).catch(() => null)
   const field = 'mt-1 w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm'
@@ -218,6 +218,8 @@ async function BasketTab({ budget, adults, childrenCount }: { budget?: string; a
             </p>
             <p className="text-xs text-gray-400 mt-2">Cheapest real prices at New World and PAK&apos;nSAVE stores anywhere in New Zealand, so a guide to what the money buys rather than one shop; the RecipeBot app uses your nearby stores. Fresh food is whole packs you can finish before it spoils; long-life food counts this week&apos;s share. Cupboard basics (oil, salt, herbs) aren&apos;t included.</p>
           </div>
+
+          {showNutrition && basket.nutrition && <NutritionCard coverage={basket.nutrition} />}
 
           {basket.groups.map((g) => (
             <div key={g.key} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -253,6 +255,40 @@ async function BasketTab({ budget, adults, childrenCount }: { budget?: string; a
           {basket.note && <p className="text-xs text-gray-400">{basket.note}</p>}
         </>
       )}
+    </div>
+  )
+}
+
+const STATUS_STYLE: Record<string, { text: string; bar: string; label: string }> = {
+  covered: { text: 'text-green-700', bar: 'bg-green-500', label: 'Covered' },
+  most: { text: 'text-gray-700', bar: 'bg-green-300', label: 'Most' },
+  'possible-gap': { text: 'text-amber-700', bar: 'bg-amber-400', label: 'Possible gap' },
+  'no-data': { text: 'text-gray-400', bar: 'bg-gray-200', label: 'No data' },
+}
+
+function NutritionCard({ coverage }: { coverage: NutritionCoverage }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5" data-testid="basket-nutrition">
+      <h3 className="text-sm font-semibold text-gray-800">Nutrition for the week</h3>
+      <p className="text-sm text-gray-600 mt-1">{coverage.summary}</p>
+      <div className="mt-4 space-y-2.5">
+        {coverage.nutrients.map((n) => {
+          const st = STATUS_STYLE[n.status]
+          return (
+            <div key={n.key}>
+              <div className="flex items-baseline justify-between text-sm">
+                <span className="text-gray-700">{n.label}</span>
+                <span className={`text-xs font-semibold ${st.text}`}>{n.status === 'no-data' ? st.label : `${n.percent}% · ${st.label}`}</span>
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                <div className={`h-full ${st.bar}`} style={{ width: `${n.status === 'no-data' ? 0 : Math.min(n.percent, 100)}%` }} />
+              </div>
+              {n.note && (n.status !== 'covered') && <p className="text-xs text-gray-400 mt-0.5">{n.note}</p>}
+            </div>
+          )
+        })}
+      </div>
+      <p className="text-xs text-gray-400 mt-4">Against the Australia/NZ Nutrient Reference Values for {coverage.people} adult-equivalent{coverage.people === 1 ? '' : 's'} (a child counts as 0.7), using USDA food data. A guide for a household basket, not personal dietary advice.</p>
     </div>
   )
 }
