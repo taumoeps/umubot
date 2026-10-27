@@ -40,6 +40,8 @@ export interface EssentialItem {
   substituteFor: string | null
   /** 'direct' = the same food, 'culinary' = a cut that cooks the same way (Year 2 feature 2.2). */
   substituteKind?: 'direct' | 'culinary' | null
+  /** Year 3 feature 3.2 (My Essentials): why this food is shown for a signed-in household. */
+  personalised?: string | null
   representative: Offer | null
   cheapestNearby: Offer | null
   outOfRange: Offer | null
